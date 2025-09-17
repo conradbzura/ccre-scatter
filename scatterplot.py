@@ -1,5 +1,3 @@
-"""Utility functions for creating JScatter scatterplots with cCRE datasets."""
-
 from typing import Optional, Dict, Any
 import pandas as pd
 import jscatter
@@ -8,16 +6,14 @@ import ipywidgets as widgets
 from ipywidgets import VBox, HBox
 
 
-def plot_ccres(
+def scatterplot(
     x: pd.DataFrame,
     y: pd.DataFrame,
     metadata: pd.DataFrame,
-    join_column: str = "cCRE",
-    x_name: str = "Dataset A",
-    y_name: str = "Dataset B",
+    join_column: str,
     x_label: Optional[str] = None,
     y_label: Optional[str] = None,
-    **scatter_kwargs: Any,
+    title: str | None = None,
 ) -> Dict[str, Any]:
     """
     Create a JScatter scatterplot with two datasets and interactive metadata table.
@@ -71,10 +67,10 @@ def plot_ccres(
 
     # Merge datasets
     # First merge x and y
-    merged_ab = pd.merge(x, y, on=join_column, how="inner", suffixes=("_a", "_b"))
+    merged_xy = pd.merge(x, y, on=join_column, how="inner", suffixes=("_x", "_y"))
 
     # Then merge with metadata
-    merged_data = pd.merge(merged_ab, metadata, on=join_column, how="inner")
+    merged_data = pd.merge(merged_xy, metadata, on=join_column, how="inner")
 
     if len(merged_data) == 0:
         raise ValueError("No matching records found between datasets")
@@ -100,12 +96,12 @@ def plot_ccres(
 
     # Use the first numeric column from each dataset, with suffix handling
     y_col = x_cols[0]
-    if y_col + "_a" in merged_data.columns:
-        y_col = y_col + "_a"
+    if y_col + "_x" in merged_data.columns:
+        y_col = y_col + "_x"
 
     x_col = y_cols[0]
-    if x_col + "_b" in merged_data.columns:
-        x_col = x_col + "_b"
+    if x_col + "_y" in merged_data.columns:
+        x_col = x_col + "_y"
 
     # Extract coordinates and ensure they are proper 1D arrays
     x_coords = merged_data[x_col].values.flatten()
@@ -123,9 +119,9 @@ def plot_ccres(
 
     # Set default labels
     if x_label is None:
-        x_label = f"{y_name} ({x_col})"
+        x_label = f"{x_col}"
     if y_label is None:
-        y_label = f"{x_name} ({y_col})"
+        y_label = f"{y_col}"
 
     # Create metadata table widget
     metadata_display = merged_data[required_metadata_cols].copy()
@@ -210,7 +206,7 @@ def plot_ccres(
         #metadata-table th:nth-child(6), #metadata-table td:nth-child(6) {{ min-width: 80px; }} /* class */
         </style>
         <div class="metadata-container">
-            <div class="metadata-title">{table_title.replace('<h4>', '').replace('</h4>', '')}</div>
+            <div class="metadata-title">{table_title.replace("<h4>", "").replace("</h4>", "")}</div>
             <div class="metadata-table-container">
                 {html_table}
             </div>
@@ -241,16 +237,13 @@ def plot_ccres(
     # Create scatter plot using jscatter.Scatter (not jscatter.plot)
     try:
         # Prepare data for jscatter.Scatter - it expects a DataFrame
-        plot_df = pd.DataFrame({
-            'x_data': x_coords,
-            'y_data': y_coords
-        })
+        plot_df = pd.DataFrame({"x_data": x_coords, "y_data": y_coords})
 
         # Create scatter plot using the correct API with square aspect ratio
         scatter = jscatter.Scatter(
             data=plot_df,
-            x='x_data',
-            y='y_data',
+            x="x_data",
+            y="y_data",
             x_label=x_label,
             y_label=y_label,
             width=500,
@@ -262,18 +255,19 @@ def plot_ccres(
 
         # Set identical axis ranges using the scale parameter
         shared_range = (axis_min, axis_max)
-        scatter.x('x_data', scale=shared_range)
-        scatter.y('y_data', scale=shared_range)
+        scatter.x("x_data", scale=shared_range)
+        scatter.y("y_data", scale=shared_range)
 
         # Workaround for jupyter-scatter Button widget bug
         # Add missing _dblclick_handler attribute to prevent AttributeError
         try:
-            if hasattr(scatter, 'widget') and hasattr(scatter.widget, 'children'):
+            if hasattr(scatter, "widget") and hasattr(scatter.widget, "children"):
                 for widget in scatter.widget.children:
-                    if hasattr(widget, 'children'):
+                    if hasattr(widget, "children"):
                         for child in widget.children:
-                            if (hasattr(child, '_click_handler') and
-                                not hasattr(child, '_dblclick_handler')):
+                            if hasattr(child, "_click_handler") and not hasattr(
+                                child, "_dblclick_handler"
+                            ):
                                 child._dblclick_handler = None
         except Exception as e:
             print(f"Warning: Could not apply Button widget fix: {e}")
@@ -281,19 +275,19 @@ def plot_ccres(
     except Exception as e:
         print(f"Error creating plot: {e}")
         # Fallback: try basic version
-        plot_df = pd.DataFrame({'x_data': x_coords, 'y_data': y_coords})
-        scatter = jscatter.Scatter(data=plot_df, x='x_data', y='y_data')
+        plot_df = pd.DataFrame({"x_data": x_coords, "y_data": y_coords})
+        scatter = jscatter.Scatter(data=plot_df, x="x_data", y="y_data")
 
     # Set up selection callback for lasso selection
     def on_selection_change(change):
         """Callback for when selection changes in the scatter plot."""
         print(f"Selection change detected: {change}")  # Debug
         # Get the new selection indices
-        selected_indices = change.get('new', [])
+        selected_indices = change.get("new", [])
         print(f"Selected indices: {selected_indices}")  # Debug
         if selected_indices is not None and len(selected_indices) > 0:
             # Convert to list if it's a numpy array
-            if hasattr(selected_indices, 'tolist'):
+            if hasattr(selected_indices, "tolist"):
                 selected_indices = selected_indices.tolist()
             update_metadata_table(selected_indices)
         else:
@@ -303,23 +297,22 @@ def plot_ccres(
     # Connect selection callback for jupyter-scatter
     try:
         # Based on jupyter-scatter documentation, use scatter.widget.selection
-        if hasattr(scatter, 'widget') and hasattr(scatter.widget, 'selection'):
+        if hasattr(scatter, "widget") and hasattr(scatter.widget, "selection"):
             print("Connecting to scatter.widget.selection trait")
-            scatter.widget.observe(on_selection_change, names=['selection'])
-        elif hasattr(scatter, 'selection'):
+            scatter.widget.observe(on_selection_change, names=["selection"])
+        elif hasattr(scatter, "selection"):
             print("Connecting to scatter.selection trait")
-            scatter.observe(on_selection_change, names=['selection'])
+            scatter.observe(on_selection_change, names=["selection"])
         else:
             # Fallback: check if scatter itself has the selection trait
-            print(f"Available traits on scatter: {scatter.trait_names() if hasattr(scatter, 'trait_names') else 'no trait_names method'}")
+            print(
+                f"Available traits on scatter: {scatter.trait_names() if hasattr(scatter, 'trait_names') else 'no trait_names method'}"
+            )
             print("Could not find selection trait - selection updates may not work")
 
     except Exception as e:
         print(f"Warning: Could not connect selection callback: {e}")
         print("Lasso selection updates may not work automatically")
-
-    # Create container widget with side-by-side layout
-    title_widget = widgets.HTML(f"<h3>cCRE Scatter Plot: {x_name} vs {y_name}</h3>")
 
     # Create flexible HBox layout
     plot_widget = scatter.show()
@@ -327,27 +320,29 @@ def plot_ccres(
     # plot_widget.layout.flex = '0 0 500px'  # Don't grow or shrink
     # plot_widget.layout.margin = '10px'  # Add margin around plot
 
-    metadata_table.layout.flex = '1 1 400px'  # Grow to fill space, min 400px
-    metadata_table.layout.min_width = '400px'
+    metadata_table.layout.flex = "1 1 400px"  # Grow to fill space, min 400px
+    metadata_table.layout.min_width = "400px"
     # metadata_table.layout.margin = '10px'  # Add margin around table
 
-    plot_and_table = HBox([
-        plot_widget,
-        metadata_table
-    ])
+    plot_and_table = HBox([plot_widget, metadata_table])
 
     # Make the HBox fill available width
-    plot_and_table.layout.width = '100%'
-    plot_and_table.layout.align_items = 'flex-start'
+    plot_and_table.layout.width = "100%"
+    plot_and_table.layout.align_items = "flex-start"
 
-    container = VBox([
-        title_widget,
-        plot_and_table
-    ])
+    if title:
+        # Create container widget with side-by-side layout
+        title_widget = widgets.HTML(f"<h3>{title}</h3>")
+        container = VBox([title_widget, plot_and_table])
+    elif x_label and y_label and not title:
+        title_widget = widgets.HTML(f"<h3>{y_label} vs. {x_label}</h3>")
+        container = VBox([title_widget, plot_and_table])
+    else:
+        container = plot_and_table
 
     # Make the main container responsive
-    container.layout.width = '100%'
-    container.layout.padding = '18px'  # Add padding to container
+    container.layout.width = "100%"
+    container.layout.padding = "18px"  # Add padding to container
 
     # Display the container
     display(container)
