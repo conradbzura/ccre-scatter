@@ -1,8 +1,0 @@
-LICENSE
-pyproject.toml
-scatterplot.py
-ccre_scatter.egg-info/PKG-INFO
-ccre_scatter.egg-info/SOURCES.txt
-ccre_scatter.egg-info/dependency_links.txt
-ccre_scatter.egg-info/requires.txt
-ccre_scatter.egg-info/top_level.txt
