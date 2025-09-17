@@ -50,8 +50,8 @@ def scatterplot(
     x_label: str | None = None,
     y_label: str | None = None,
     title: str | None = None,
-    colormap: Callable | None = radius(1),
-    default_class: str = "All",
+    colormap: Callable | None = None,
+    default_class: str = "TF",
 ) -> Dict[str, Any]:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
@@ -80,7 +80,7 @@ def scatterplot(
         - kde(bandwidth=1): Kernel density estimation
         - knn(k=100): K-nearest neighbors density
         - radius(radius=1): Points within radius density
-        - None: No density coloring (default)
+        - None: Use class-based coloring (default)
     default_class : str, default "All"
         Default class to filter by on initial display. Use "All" to show all classes.
         A dropdown will allow changing the class filter.
@@ -123,7 +123,25 @@ def scatterplot(
         raise ValueError("No matching records found between datasets")
 
     # Get unique classes for dropdown
-    available_classes = ["All"] + sorted(full_merged_data["class"].unique().to_list())
+    unique_classes = sorted(full_merged_data["class"].unique().to_list())
+    available_classes = ["All"] + unique_classes
+
+    # Create static color mapping for all classes using custom color palette
+    color_palette = [
+        "#8f2be7",  # Purple
+        "#fb4fd9",  # Pink
+        "#e9162d",  # Red
+        "#f28200",  # Orange
+        "#ffdb28",  # Yellow
+        "#1fb819",  # Green
+        "#00e1da",  # Cyan
+        "#007bd8",  # Blue
+    ]
+
+    # Create mapping of class to color
+    class_color_map = {}
+    for i, cls in enumerate(unique_classes):
+        class_color_map[cls] = color_palette[i % len(color_palette)]
 
     # Validate default_class
     if default_class not in available_classes:
@@ -184,6 +202,32 @@ def scatterplot(
     valid_indices = np.where(valid_mask)[0]
     merged_data = merged_data[valid_indices]
 
+    # Create complete plot DataFrame once for all cCREs with their colors
+    # Filter out NaN values from the complete dataset
+    full_merged_clean = full_merged_data.filter(
+        (~pl.col(x_col).is_nan()) & (~pl.col(y_col).is_nan())
+    )
+
+    # Extract all coordinates for the complete dataset
+    all_x_coords = full_merged_clean[x_col].to_numpy().ravel()
+    all_y_coords = full_merged_clean[y_col].to_numpy().ravel()
+    all_class_data = full_merged_clean["class"].to_numpy()
+
+    # Create complete plot DataFrame with colors for all cCREs
+    complete_plot_df = pd.DataFrame({
+        "x_data": all_x_coords,
+        "y_data": all_y_coords,
+        "class": all_class_data
+    })
+
+    if colormap is not None:
+        # Use density-based coloring for all points
+        points = np.column_stack([all_x_coords, all_y_coords])
+        complete_plot_df["colormap"] = colormap(points)
+    else:
+        # Use class-based static coloring for all points
+        complete_plot_df["color"] = [class_color_map[cls] for cls in all_class_data]
+
     # Set default labels
     if x_label is None:
         x_label = f"{x_col}"
@@ -197,27 +241,24 @@ def scatterplot(
     current_scatter = None
     current_plot_widget = None
 
-    def create_plot(filtered_data):
-        """Create a scatter plot for the given filtered data"""
+    def create_plot(selected_class="All"):
+        """Create a scatter plot for the selected class by filtering complete_plot_df"""
         nonlocal current_scatter, current_plot_widget, selected_data
 
-        # Extract coordinates for the filtered data
-        filter_x_coords = filtered_data[x_col].to_numpy().ravel()
-        filter_y_coords = filtered_data[y_col].to_numpy().ravel()
+        # Filter the complete plot DataFrame based on selected class (no copy needed)
+        if selected_class == "All":
+            plot_df = complete_plot_df
+        else:
+            plot_df = complete_plot_df[complete_plot_df["class"] == selected_class]
 
-        # Remove any NaN values
-        valid_mask = ~(np.isnan(filter_x_coords) | np.isnan(filter_y_coords))
-        filter_x_coords = filter_x_coords[valid_mask]
-        filter_y_coords = filter_y_coords[valid_mask]
-        # Convert boolean mask to row indices for Polars filtering
-        valid_indices = np.where(valid_mask)[0]
-        filtered_data_clean = filtered_data[valid_indices]
-
-        if len(filter_x_coords) == 0:
-            print("No valid data points for the selected class")
+        if len(plot_df) == 0:
+            print(f"No valid data points for class: {selected_class}")
             return None
 
         # Calculate shared axis limits for equal coordinate systems
+        filter_x_coords = plot_df["x_data"].to_numpy()
+        filter_y_coords = plot_df["y_data"].to_numpy()
+
         x_min, x_max = filter_x_coords.min(), filter_x_coords.max()
         y_min, y_max = filter_y_coords.min(), filter_y_coords.max()
 
@@ -235,34 +276,18 @@ def scatterplot(
         )
         print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
 
-        # Calculate density if requested
-        colors = None
-        if colormap is not None:
-            points = np.column_stack([filter_x_coords, filter_y_coords])
-            colors = colormap(points)
-
-        return (
-            filter_x_coords,
-            filter_y_coords,
-            filtered_data_clean,
-            colors,
-            axis_min,
-            axis_max,
-        )
+        return plot_df, axis_min, axis_max
 
     # Initial plot creation
-    plot_result = create_plot(merged_data)
+    plot_result = create_plot(default_class)
     if plot_result is None:
         raise ValueError("No valid data points to plot")
 
-    x_coords, y_coords, merged_data, colors, axis_min, axis_max = plot_result
+    plot_df, axis_min, axis_max = plot_result
 
     # Create scatter plot using jscatter.Scatter (not jscatter.plot)
     try:
-        # Prepare data for jscatter.Scatter - it expects a DataFrame
-        plot_df = pd.DataFrame({"x_data": x_coords, "y_data": y_coords})
-        if colors is not None:
-            plot_df["colormap"] = colors
+        # plot_df is already prepared with all necessary data and colors
 
         # Create scatter plot using the correct API with square aspect ratio
         scatter = jscatter.Scatter(
@@ -283,12 +308,16 @@ def scatterplot(
         scatter.x("x_data", scale=shared_range)
         scatter.y("y_data", scale=shared_range)
 
-        # Configure density-based coloring if requested
-        if colors is not None:
-            # Use color mapping for density while keeping the built-in density opacity
+        # Configure coloring
+        if colormap is not None and "colormap" in plot_df.columns:
+            # Use color mapping for density
             scatter.color(by="colormap", map="viridis")
+        elif "color" in plot_df.columns:
+            # Use static class-based coloring with fixed color mapping
+            # Create a fixed categorical mapping for all possible classes
+            scatter.color(by="class", map=class_color_map)
         else:
-            # Enable density-based opacity for better visualization of overlapping points
+            # Fallback to density-based opacity for better visualization of overlapping points
             scatter.opacity(by="density")
 
         # Workaround for jupyter-scatter Button widget bug
@@ -354,42 +383,21 @@ def scatterplot(
         selected_class = change["new"]
         print(f"Filtering by class: {selected_class}")
 
-        # Filter the data
-        if selected_class == "All":
-            filtered_data = full_merged_data
-        else:
-            filtered_data = full_merged_data.filter(pl.col("class") == selected_class)
-
-        if len(filtered_data) == 0:
-            print(f"No data available for class: {selected_class}")
-            return
 
         # Create new plot with filtered data
-        plot_result = create_plot(filtered_data)
+        plot_result = create_plot(selected_class)
         if plot_result is None:
             return
 
-        (
-            new_x_coords,
-            new_y_coords,
-            new_merged_data,
-            new_colors,
-            new_axis_min,
-            new_axis_max,
-        ) = plot_result
-
-        # Update the merged_data for selection callbacks
-        merged_data = new_merged_data
+        new_plot_df, new_axis_min, new_axis_max = plot_result
 
         # Create new scatter plot
         try:
-            plot_df = pd.DataFrame({"x_data": new_x_coords, "y_data": new_y_coords})
-            if new_colors is not None:
-                plot_df["colormap"] = new_colors
+            # new_plot_df already has all the data and colors prepared
 
             # Create new scatter plot
             new_scatter = jscatter.Scatter(
-                data=plot_df,
+                data=new_plot_df,
                 x="x_data",
                 y="y_data",
                 x_label=x_label,
@@ -407,9 +415,15 @@ def scatterplot(
             new_scatter.y("y_data", scale=shared_range)
 
             # Configure coloring
-            if new_colors is not None:
+            if colormap is not None and "colormap" in new_plot_df.columns:
+                # Use color mapping for density
                 new_scatter.color(by="colormap", map="viridis")
+            elif "color" in new_plot_df.columns:
+                # Use static class-based coloring with fixed color mapping
+                # Create a fixed categorical mapping for all possible classes
+                new_scatter.color(by="class", map=class_color_map)
             else:
+                # Fallback to density-based opacity
                 new_scatter.opacity(by="density")
 
             # Connect selection callback
