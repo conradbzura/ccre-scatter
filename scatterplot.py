@@ -1,12 +1,13 @@
-from typing import Dict, Any, Callable
-import polars as pl
-import pandas as pd  # Keep for jscatter compatibility
+from typing import Any, Callable, Dict
+
+import ipywidgets as widgets
 import jscatter
 import numpy as np
+import pandas as pd
+import polars as pl
 from IPython.display import display
-import ipywidgets as widgets
-from ipywidgets import VBox, HBox
-from sklearn.neighbors import NearestNeighbors, KDTree, KernelDensity
+from ipywidgets import HBox, VBox
+from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
 
 
 def kde(bandwidth=1):
@@ -50,7 +51,7 @@ def scatterplot(
     y_label: str | None = None,
     title: str | None = None,
     colormap: Callable | None = radius(1),
-    default_class: str = "TF",
+    default_class: str = "All",
 ) -> Dict[str, Any]:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
@@ -80,8 +81,9 @@ def scatterplot(
         - knn(k=100): K-nearest neighbors density
         - radius(radius=1): Points within radius density
         - None: No density coloring (default)
-    default_class : str, default "TF"
-        Default class to filter by on initial display. A dropdown will allow changing the class filter.
+    default_class : str, default "All"
+        Default class to filter by on initial display. Use "All" to show all classes.
+        A dropdown will allow changing the class filter.
 
     Returns:
     --------
@@ -121,7 +123,7 @@ def scatterplot(
         raise ValueError("No matching records found between datasets")
 
     # Get unique classes for dropdown
-    available_classes = sorted(full_merged_data["class"].unique().to_list())
+    available_classes = ["All"] + sorted(full_merged_data["class"].unique().to_list())
 
     # Validate default_class
     if default_class not in available_classes:
@@ -134,7 +136,10 @@ def scatterplot(
             raise ValueError("No class data available for filtering")
 
     # Initially filter by default class
-    merged_data = full_merged_data.filter(pl.col("class") == default_class)
+    if default_class == "All":
+        merged_data = full_merged_data
+    else:
+        merged_data = full_merged_data.filter(pl.col("class") == default_class)
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
@@ -350,7 +355,10 @@ def scatterplot(
         print(f"Filtering by class: {selected_class}")
 
         # Filter the data
-        filtered_data = full_merged_data.filter(pl.col("class") == selected_class)
+        if selected_class == "All":
+            filtered_data = full_merged_data
+        else:
+            filtered_data = full_merged_data.filter(pl.col("class") == selected_class)
 
         if len(filtered_data) == 0:
             print(f"No data available for class: {selected_class}")
