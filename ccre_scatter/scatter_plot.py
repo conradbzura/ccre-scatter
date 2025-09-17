@@ -5,7 +5,7 @@ import pandas as pd
 import jscatter
 from IPython.display import display
 import ipywidgets as widgets
-from ipywidgets import VBox
+from ipywidgets import VBox, HBox
 
 
 def create_ccre_scatterplot(
@@ -151,34 +151,56 @@ def create_ccre_scatterplot(
             table_id="metadata-table",
         )
 
-        # Add some basic styling
+        # Add some basic styling with fixed height matching the plot
         styled_html = f"""
         <style>
+        .metadata-container {{
+            width: 100%;
+            height: 500px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: white;
+        }}
+        .metadata-title {{
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #ddd;
+            margin: 0;
+            font-size: 16px;
+            font-weight: bold;
+        }}
+        .metadata-table-container {{
+            height: 450px;
+            overflow-y: auto;
+            padding: 0;
+        }}
         #metadata-table {{
             font-family: Arial, sans-serif;
             border-collapse: collapse;
             width: 100%;
-            max-height: 400px;
-            overflow-y: auto;
-            display: block;
+            margin: 0;
         }}
         #metadata-table th, #metadata-table td {{
             text-align: left;
             padding: 8px;
-            border-bottom: 1px solid #ddd;
+            border-bottom: 1px solid #eee;
+            font-size: 12px;
         }}
         #metadata-table th {{
             background-color: #f2f2f2;
             position: sticky;
             top: 0;
+            z-index: 10;
         }}
         #metadata-table tr:hover {{
             background-color: #f5f5f5;
         }}
         </style>
-        {table_title}
-        <div style="max-height: 400px; overflow-y: auto;">
-        {html_table}
+        <div class="metadata-container">
+            <div class="metadata-title">{table_title.replace('<h4>', '').replace('</h4>', '')}</div>
+            <div class="metadata-table-container">
+                {html_table}
+            </div>
         </div>
         """
 
@@ -187,20 +209,21 @@ def create_ccre_scatterplot(
     # Initialize metadata table
     update_metadata_table()
 
-    # Debug information
-    print(f"Data shapes: x_coords={x_coords.shape}, y_coords={y_coords.shape}")
-    print(f"Data types: x_coords={x_coords.dtype}, y_coords={y_coords.dtype}")
-    print(f"Sample x values: {x_coords[:5] if len(x_coords) > 0 else 'empty'}")
-    print(f"Sample y values: {y_coords[:5] if len(y_coords) > 0 else 'empty'}")
+    # Calculate shared axis limits for equal coordinate systems
+    x_min, x_max = x_coords.min(), x_coords.max()
+    y_min, y_max = y_coords.min(), y_coords.max()
 
-    # Prepare scatter plot arguments - try without selection first
-    scatter_args = {
-        "x": x_coords,
-        "y": y_coords,
-        "x_label": x_label,
-        "y_label": y_label,
-        **scatter_kwargs,
-    }
+    # Use the same range for both axes to create shared coordinate system
+    overall_min = min(x_min, y_min)
+    overall_max = max(x_max, y_max)
+
+    # Add a small padding
+    padding = (overall_max - overall_min) * 0.05
+    axis_min = overall_min - padding
+    axis_max = overall_max + padding
+
+    print(f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]")
+    print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
 
     # Create scatter plot using jscatter.Scatter (not jscatter.plot)
     try:
@@ -210,14 +233,37 @@ def create_ccre_scatterplot(
             'y_data': y_coords
         })
 
-        # Create scatter plot using the correct API
+        # Create scatter plot using the correct API with square aspect ratio
         scatter = jscatter.Scatter(
             data=plot_df,
             x='x_data',
             y='y_data',
             x_label=x_label,
-            y_label=y_label
+            y_label=y_label,
+            width=500,  # Square dimensions
+            height=500,  # Square dimensions
+            aspect_ratio=1.0,  # Square aspect ratio
+            axes=True,  # Enable axes
+            axes_grid=True,  # Show grid lines
         )
+
+        # Set identical axis ranges using the scale parameter
+        shared_range = (axis_min, axis_max)
+        scatter.x('x_data', scale=shared_range)
+        scatter.y('y_data', scale=shared_range)
+
+        # Workaround for jupyter-scatter Button widget bug
+        # Add missing _dblclick_handler attribute to prevent AttributeError
+        try:
+            if hasattr(scatter, 'widget') and hasattr(scatter.widget, 'children'):
+                for widget in scatter.widget.children:
+                    if hasattr(widget, 'children'):
+                        for child in widget.children:
+                            if (hasattr(child, '_click_handler') and
+                                not hasattr(child, '_dblclick_handler')):
+                                child._dblclick_handler = None
+        except Exception as e:
+            print(f"Warning: Could not apply Button widget fix: {e}")
 
     except Exception as e:
         print(f"Error creating plot: {e}")
@@ -259,14 +305,17 @@ def create_ccre_scatterplot(
         print(f"Warning: Could not connect selection callback: {e}")
         print("Lasso selection updates may not work automatically")
 
-    # Create container widget - use scatter.show() for the plot
-    container = VBox(
-        [
-            widgets.HTML(f"<h3>cCRE Scatter Plot: {x_name} vs {y_name}</h3>"),
-            scatter.show(),
-            metadata_table,
-        ]
-    )
+    # Create container widget with side-by-side layout
+    title_widget = widgets.HTML(f"<h3>cCRE Scatter Plot: {x_name} vs {y_name}</h3>")
+    plot_and_table = HBox([
+        scatter.show(),
+        metadata_table
+    ])
+
+    container = VBox([
+        title_widget,
+        plot_and_table
+    ])
 
     # Display the container
     display(container)
