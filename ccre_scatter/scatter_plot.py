@@ -8,7 +8,7 @@ import ipywidgets as widgets
 from ipywidgets import VBox, HBox
 
 
-def create_ccre_scatterplot(
+def plot_ccres(
     x: pd.DataFrame,
     y: pd.DataFrame,
     metadata: pd.DataFrame,
@@ -151,15 +151,17 @@ def create_ccre_scatterplot(
             table_id="metadata-table",
         )
 
-        # Add some basic styling with fixed height matching the plot
+        # Add responsive styling with minimum width and flexible width
         styled_html = f"""
         <style>
         .metadata-container {{
-            width: 100%;
+            width: 99%;
+            min-width: 400px;
             height: 500px;
             border: 1px solid #ddd;
-            border-radius: 4px;
             background-color: white;
+            flex: 1;
+            margin-left: 10px;
         }}
         .metadata-title {{
             padding: 10px;
@@ -172,12 +174,14 @@ def create_ccre_scatterplot(
         .metadata-table-container {{
             height: 450px;
             overflow-y: auto;
+            overflow-x: auto;
             padding: 0;
         }}
         #metadata-table {{
             font-family: Arial, sans-serif;
             border-collapse: collapse;
             width: 100%;
+            min-width: 380px;
             margin: 0;
         }}
         #metadata-table th, #metadata-table td {{
@@ -185,6 +189,8 @@ def create_ccre_scatterplot(
             padding: 8px;
             border-bottom: 1px solid #eee;
             font-size: 12px;
+            white-space: nowrap;
+            min-width: fit-content;
         }}
         #metadata-table th {{
             background-color: #f2f2f2;
@@ -195,6 +201,13 @@ def create_ccre_scatterplot(
         #metadata-table tr:hover {{
             background-color: #f5f5f5;
         }}
+        /* Column-specific widths */
+        #metadata-table th:nth-child(1), #metadata-table td:nth-child(1) {{ min-width: 80px; }} /* rDHS */
+        #metadata-table th:nth-child(2), #metadata-table td:nth-child(2) {{ min-width: 80px; }} /* cCRE */
+        #metadata-table th:nth-child(3), #metadata-table td:nth-child(3) {{ min-width: 60px; }} /* chrom */
+        #metadata-table th:nth-child(4), #metadata-table td:nth-child(4) {{ min-width: 80px; }} /* start */
+        #metadata-table th:nth-child(5), #metadata-table td:nth-child(5) {{ min-width: 80px; }} /* end */
+        #metadata-table th:nth-child(6), #metadata-table td:nth-child(6) {{ min-width: 80px; }} /* class */
         </style>
         <div class="metadata-container">
             <div class="metadata-title">{table_title.replace('<h4>', '').replace('</h4>', '')}</div>
@@ -240,8 +253,8 @@ def create_ccre_scatterplot(
             y='y_data',
             x_label=x_label,
             y_label=y_label,
-            width=500,  # Square dimensions
-            height=500,  # Square dimensions
+            width=500,
+            height=500,
             aspect_ratio=1.0,  # Square aspect ratio
             axes=True,  # Enable axes
             axes_grid=True,  # Show grid lines
@@ -307,15 +320,34 @@ def create_ccre_scatterplot(
 
     # Create container widget with side-by-side layout
     title_widget = widgets.HTML(f"<h3>cCRE Scatter Plot: {x_name} vs {y_name}</h3>")
+
+    # Create flexible HBox layout
+    plot_widget = scatter.show()
+    # plot_widget.layout.width = '500px'  # Fixed width for plot (updated to match scatter dimensions)
+    # plot_widget.layout.flex = '0 0 500px'  # Don't grow or shrink
+    # plot_widget.layout.margin = '10px'  # Add margin around plot
+
+    metadata_table.layout.flex = '1 1 400px'  # Grow to fill space, min 400px
+    metadata_table.layout.min_width = '400px'
+    # metadata_table.layout.margin = '10px'  # Add margin around table
+
     plot_and_table = HBox([
-        scatter.show(),
+        plot_widget,
         metadata_table
     ])
+
+    # Make the HBox fill available width
+    plot_and_table.layout.width = '100%'
+    plot_and_table.layout.align_items = 'flex-start'
 
     container = VBox([
         title_widget,
         plot_and_table
     ])
+
+    # Make the main container responsive
+    container.layout.width = '100%'
+    container.layout.padding = '18px'  # Add padding to container
 
     # Display the container
     display(container)
