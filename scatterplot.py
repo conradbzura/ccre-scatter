@@ -60,7 +60,7 @@ def scatterplot(
     y_label: str | None = None,
     title: str | None = None,
     colormap: Callable | None = None,
-    default_class: str = "TF",
+    default_class: str = "All",
 ) -> ScatterplotResult:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
