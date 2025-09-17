@@ -107,9 +107,19 @@ def create_ccre_scatterplot(
     if x_col + "_b" in merged_data.columns:
         x_col = x_col + "_b"
 
-    # Extract coordinates
-    x_coords = merged_data[x_col].values
-    y_coords = merged_data[y_col].values
+    # Extract coordinates and ensure they are proper 1D arrays
+    x_coords = merged_data[x_col].values.flatten()
+    y_coords = merged_data[y_col].values.flatten()
+
+    # Ensure we have valid numeric data
+    if len(x_coords) == 0 or len(y_coords) == 0:
+        raise ValueError("No data points to plot")
+
+    # Remove any NaN values
+    valid_mask = ~(pd.isna(x_coords) | pd.isna(y_coords))
+    x_coords = x_coords[valid_mask]
+    y_coords = y_coords[valid_mask]
+    merged_data = merged_data[valid_mask]
 
     # Set default labels
     if x_label is None:
@@ -177,7 +187,13 @@ def create_ccre_scatterplot(
     # Initialize metadata table
     update_metadata_table()
 
-    # Prepare scatter plot arguments
+    # Debug information
+    print(f"Data shapes: x_coords={x_coords.shape}, y_coords={y_coords.shape}")
+    print(f"Data types: x_coords={x_coords.dtype}, y_coords={y_coords.dtype}")
+    print(f"Sample x values: {x_coords[:5] if len(x_coords) > 0 else 'empty'}")
+    print(f"Sample y values: {y_coords[:5] if len(y_coords) > 0 else 'empty'}")
+
+    # Prepare scatter plot arguments - try without selection first
     scatter_args = {
         "x": x_coords,
         "y": y_coords,
@@ -186,33 +202,68 @@ def create_ccre_scatterplot(
         **scatter_kwargs,
     }
 
-    # Create scatter plot
-    scatter = jscatter.plot(**scatter_args)
+    # Create scatter plot using jscatter.Scatter (not jscatter.plot)
+    try:
+        # Prepare data for jscatter.Scatter - it expects a DataFrame
+        plot_df = pd.DataFrame({
+            'x_data': x_coords,
+            'y_data': y_coords
+        })
+
+        # Create scatter plot using the correct API
+        scatter = jscatter.Scatter(
+            data=plot_df,
+            x='x_data',
+            y='y_data',
+            x_label=x_label,
+            y_label=y_label
+        )
+
+    except Exception as e:
+        print(f"Error creating plot: {e}")
+        # Fallback: try basic version
+        plot_df = pd.DataFrame({'x_data': x_coords, 'y_data': y_coords})
+        scatter = jscatter.Scatter(data=plot_df, x='x_data', y='y_data')
 
     # Set up selection callback for lasso selection
-    def on_selection_change(selection):
+    def on_selection_change(change):
         """Callback for when selection changes in the scatter plot."""
-        if hasattr(selection, "indices") and selection.indices is not None:
-            selected_indices = list(selection.indices)
+        print(f"Selection change detected: {change}")  # Debug
+        # Get the new selection indices
+        selected_indices = change.get('new', [])
+        print(f"Selected indices: {selected_indices}")  # Debug
+        if selected_indices is not None and len(selected_indices) > 0:
+            # Convert to list if it's a numpy array
+            if hasattr(selected_indices, 'tolist'):
+                selected_indices = selected_indices.tolist()
             update_metadata_table(selected_indices)
         else:
+            # No selection - show all data
             update_metadata_table()
 
-    # Try to connect selection callback (this may depend on jscatter version)
+    # Connect selection callback for jupyter-scatter
     try:
-        if hasattr(scatter, "selection"):
-            scatter.selection.observe(on_selection_change, names="indices")
-        elif hasattr(scatter, "observe"):
-            scatter.observe(on_selection_change, names="selection")
+        # Based on jupyter-scatter documentation, use scatter.widget.selection
+        if hasattr(scatter, 'widget') and hasattr(scatter.widget, 'selection'):
+            print("Connecting to scatter.widget.selection trait")
+            scatter.widget.observe(on_selection_change, names=['selection'])
+        elif hasattr(scatter, 'selection'):
+            print("Connecting to scatter.selection trait")
+            scatter.observe(on_selection_change, names=['selection'])
+        else:
+            # Fallback: check if scatter itself has the selection trait
+            print(f"Available traits on scatter: {scatter.trait_names() if hasattr(scatter, 'trait_names') else 'no trait_names method'}")
+            print("Could not find selection trait - selection updates may not work")
+
     except Exception as e:
         print(f"Warning: Could not connect selection callback: {e}")
         print("Lasso selection updates may not work automatically")
 
-    # Create container widget
+    # Create container widget - use scatter.show() for the plot
     container = VBox(
         [
             widgets.HTML(f"<h3>cCRE Scatter Plot: {x_name} vs {y_name}</h3>"),
-            scatter,
+            scatter.show(),
             metadata_table,
         ]
     )
