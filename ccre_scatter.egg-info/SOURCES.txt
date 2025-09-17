@@ -1,7 +1,6 @@
 LICENSE
 pyproject.toml
-ccre_scatter/__init__.py
-ccre_scatter/scatter_plot.py
+scatterplot.py
 ccre_scatter.egg-info/PKG-INFO
 ccre_scatter.egg-info/SOURCES.txt
 ccre_scatter.egg-info/dependency_links.txt

@@ -1,9 +1,41 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 import pandas as pd
 import jscatter
+import numpy as np
 from IPython.display import display
 import ipywidgets as widgets
 from ipywidgets import VBox, HBox
+from sklearn.neighbors import NearestNeighbors, KDTree, KernelDensity
+
+
+def kde(bandwidth=1):
+    def calculate_kde_density(points):
+        """Calculate density using Gaussian kernel"""
+        kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(points)
+        log_density = kde.score_samples(points)
+        return np.exp(log_density)  # Convert from log density
+    return calculate_kde_density
+
+
+def knn(k=100):
+    def calculate_knn_density(points):
+        """Calculate density based on distance to k-th nearest neighbor"""
+        nbrs = NearestNeighbors(n_neighbors=k + 1).fit(points)  # +1 to exclude self
+        distances, _ = nbrs.kneighbors(points)
+        # Use inverse of average distance to k neighbors as density measure
+        density = 1 / (distances[:, 1:].mean(axis=1) + 1e-10)  # avoid division by zero
+        return density
+
+    return calculate_knn_density
+
+
+def radius(radius=1):
+    def calculate_radius_density(points):
+        """Calculate density based on points within radius"""
+        tree = KDTree(points)
+        counts = tree.query_radius(points, r=radius, count_only=True)
+        return np.array(counts, dtype=float)
+    return calculate_radius_density
 
 
 def scatterplot(
@@ -11,9 +43,10 @@ def scatterplot(
     y: pd.DataFrame,
     metadata: pd.DataFrame,
     join_column: str,
-    x_label: Optional[str] = None,
-    y_label: Optional[str] = None,
+    x_label: str | None = None,
+    y_label: str | None = None,
     title: str | None = None,
+    colormap: Callable | None = None
 ) -> Dict[str, Any]:
     """
     Create a JScatter scatterplot with two datasets and interactive metadata table.
@@ -26,18 +59,25 @@ def scatterplot(
         Dataset for X-axis values
     metadata : pd.DataFrame
         Metadata describing the cCREs with columns: rDHS, cCRE, chrom, start, end, class
-    join_column : str, default "cCRE"
+    join_column : str
         Column name to join the datasets on
-    x_name : str, default "Dataset A"
-        Name for dataset A (Y-axis)
-    y_name : str, default "Dataset B"
-        Name for dataset B (X-axis)
     x_label : str, optional
         Custom label for X-axis
     y_label : str, optional
         Custom label for Y-axis
-    **scatter_kwargs : Any
-        Additional keyword arguments passed to jscatter.plot()
+    title : str, optional
+        Custom title for the plot
+    colormap : str, optional
+        Method for density-based coloring. Options: 'knn', 'radius', 'kde', None
+        - 'knn': K-nearest neighbors density
+        - 'radius': Points within radius density
+        - 'kde': Kernel density estimation
+        - None: No density coloring (default)
+    density_params : dict, optional
+        Parameters for density calculation methods:
+        - For 'knn': {'k': int} (default k=10)
+        - For 'radius': {'radius': float} (default radius=0.1)
+        - For 'kde': {'bandwidth': float} (default bandwidth=0.1)
 
     Returns:
     --------
@@ -234,10 +274,18 @@ def scatterplot(
     print(f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]")
     print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
 
+    # Calculate density if requested
+    colors = None
+    if colormap is not None:
+        points = np.column_stack([x_coords, y_coords])
+        colors = colormap(points)
+
     # Create scatter plot using jscatter.Scatter (not jscatter.plot)
     try:
         # Prepare data for jscatter.Scatter - it expects a DataFrame
         plot_df = pd.DataFrame({"x_data": x_coords, "y_data": y_coords})
+        if colors is not None:
+            plot_df["colormap"] = colors
 
         # Create scatter plot using the correct API with square aspect ratio
         scatter = jscatter.Scatter(
@@ -257,6 +305,14 @@ def scatterplot(
         shared_range = (axis_min, axis_max)
         scatter.x("x_data", scale=shared_range)
         scatter.y("y_data", scale=shared_range)
+
+        # Configure density-based coloring if requested
+        if colors is not None:
+            # Use color mapping for density while keeping the built-in density opacity
+            scatter.color(by="colormap", map="viridis")
+        else:
+            # Enable density-based opacity for better visualization of overlapping points
+            scatter.opacity(by="density")
 
         # Workaround for jupyter-scatter Button widget bug
         # Add missing _dblclick_handler attribute to prevent AttributeError
