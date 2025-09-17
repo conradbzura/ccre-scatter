@@ -46,7 +46,8 @@ def scatterplot(
     x_label: str | None = None,
     y_label: str | None = None,
     title: str | None = None,
-    colormap: Callable | None = None
+    colormap: Callable | None = None,
+    default_class: str = "TF"
 ) -> Dict[str, Any]:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
@@ -73,6 +74,8 @@ def scatterplot(
         - knn(k=100): K-nearest neighbors density
         - radius(radius=1): Points within radius density
         - None: No density coloring (default)
+    default_class : str, default "TF"
+        Default class to filter by on initial display. A dropdown will allow changing the class filter.
 
     Returns:
     --------
@@ -82,6 +85,7 @@ def scatterplot(
         - 'merged_data': The merged dataset used for plotting
         - 'container': The plot container widget
         - 'selection': Function that returns DataFrame of currently selected points
+        - 'class_dropdown': The class filter dropdown widget
     """
 
     # Validate inputs
@@ -105,10 +109,24 @@ def scatterplot(
     merged_xy = pd.merge(x, y, on=join_column, how="inner", suffixes=("_x", "_y"))
 
     # Then merge with metadata
-    merged_data = pd.merge(merged_xy, metadata, on=join_column, how="inner")
+    full_merged_data = pd.merge(merged_xy, metadata, on=join_column, how="inner")
 
-    if len(merged_data) == 0:
+    if len(full_merged_data) == 0:
         raise ValueError("No matching records found between datasets")
+
+    # Get unique classes for dropdown
+    available_classes = sorted(full_merged_data["class"].unique())
+
+    # Validate default_class
+    if default_class not in available_classes:
+        print(f"Warning: default_class '{default_class}' not found in data. Available classes: {available_classes}")
+        if available_classes:
+            default_class = available_classes[0]
+        else:
+            raise ValueError("No class data available for filtering")
+
+    # Initially filter by default class
+    merged_data = full_merged_data[full_merged_data["class"] == default_class].copy()
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
@@ -139,8 +157,8 @@ def scatterplot(
         x_col = x_col + "_y"
 
     # Extract coordinates and ensure they are proper 1D arrays
-    x_coords = merged_data[x_col].values.flatten()
-    y_coords = merged_data[y_col].values.flatten()
+    x_coords = merged_data[x_col].values.ravel()
+    y_coords = merged_data[y_col].values.ravel()
 
     # Ensure we have valid numeric data
     if len(x_coords) == 0 or len(y_coords) == 0:
@@ -161,27 +179,58 @@ def scatterplot(
     # Create selection tracking for selected points
     selected_data = pd.DataFrame()  # Will hold selected points data
 
-    # Calculate shared axis limits for equal coordinate systems
-    x_min, x_max = x_coords.min(), x_coords.max()
-    y_min, y_max = y_coords.min(), y_coords.max()
+    # Storage for current plot components
+    current_scatter = None
+    current_plot_widget = None
 
-    # Use the same range for both axes to create shared coordinate system
-    overall_min = min(x_min, y_min)
-    overall_max = max(x_max, y_max)
+    def create_plot(filtered_data):
+        """Create a scatter plot for the given filtered data"""
+        nonlocal current_scatter, current_plot_widget, selected_data
 
-    # Add a small padding
-    padding = (overall_max - overall_min) * 0.05
-    axis_min = overall_min - padding
-    axis_max = overall_max + padding
+        # Extract coordinates for the filtered data
+        filter_x_coords = filtered_data[x_col].values.ravel()
+        filter_y_coords = filtered_data[y_col].values.ravel()
 
-    print(f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]")
-    print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
+        # Remove any NaN values
+        valid_mask = ~(pd.isna(filter_x_coords) | pd.isna(filter_y_coords))
+        filter_x_coords = filter_x_coords[valid_mask]
+        filter_y_coords = filter_y_coords[valid_mask]
+        filtered_data_clean = filtered_data[valid_mask]
 
-    # Calculate density if requested
-    colors = None
-    if colormap is not None:
-        points = np.column_stack([x_coords, y_coords])
-        colors = colormap(points)
+        if len(filter_x_coords) == 0:
+            print("No valid data points for the selected class")
+            return None
+
+        # Calculate shared axis limits for equal coordinate systems
+        x_min, x_max = filter_x_coords.min(), filter_x_coords.max()
+        y_min, y_max = filter_y_coords.min(), filter_y_coords.max()
+
+        # Use the same range for both axes to create shared coordinate system
+        overall_min = min(x_min, y_min)
+        overall_max = max(x_max, y_max)
+
+        # Add a small padding
+        padding = (overall_max - overall_min) * 0.05
+        axis_min = overall_min - padding
+        axis_max = overall_max + padding
+
+        print(f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]")
+        print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
+
+        # Calculate density if requested
+        colors = None
+        if colormap is not None:
+            points = np.column_stack([filter_x_coords, filter_y_coords])
+            colors = colormap(points)
+
+        return filter_x_coords, filter_y_coords, filtered_data_clean, colors, axis_min, axis_max
+
+    # Initial plot creation
+    plot_result = create_plot(merged_data)
+    if plot_result is None:
+        raise ValueError("No valid data points to plot")
+
+    x_coords, y_coords, merged_data, colors, axis_min, axis_max = plot_result
 
     # Create scatter plot using jscatter.Scatter (not jscatter.plot)
     try:
@@ -275,18 +324,118 @@ def scatterplot(
         print(f"Warning: Could not connect selection callback: {e}")
         print("Lasso selection updates may not work automatically")
 
-    # Create layout with just the plot
+    # Create class filter dropdown
+    class_dropdown = widgets.Dropdown(
+        options=available_classes,
+        value=default_class,
+        description='Class:',
+        disabled=False,
+    )
+
+    def update_plot(change):
+        """Update the plot when class filter changes"""
+        nonlocal current_scatter, current_plot_widget, merged_data, scatter
+
+        selected_class = change['new']
+        print(f"Filtering by class: {selected_class}")
+
+        # Filter the data
+        filtered_data = full_merged_data[full_merged_data["class"] == selected_class].copy()
+
+        if len(filtered_data) == 0:
+            print(f"No data available for class: {selected_class}")
+            return
+
+        # Create new plot with filtered data
+        plot_result = create_plot(filtered_data)
+        if plot_result is None:
+            return
+
+        new_x_coords, new_y_coords, new_merged_data, new_colors, new_axis_min, new_axis_max = plot_result
+
+        # Update the merged_data for selection callbacks
+        merged_data = new_merged_data
+
+        # Create new scatter plot
+        try:
+            plot_df = pd.DataFrame({"x_data": new_x_coords, "y_data": new_y_coords})
+            if new_colors is not None:
+                plot_df["colormap"] = new_colors
+
+            # Create new scatter plot
+            new_scatter = jscatter.Scatter(
+                data=plot_df,
+                x="x_data",
+                y="y_data",
+                x_label=x_label,
+                y_label=y_label,
+                width=500,
+                height=500,
+                aspect_ratio=1.0,
+                axes=True,
+                axes_grid=True,
+            )
+
+            # Set axis ranges
+            shared_range = (new_axis_min, new_axis_max)
+            new_scatter.x("x_data", scale=shared_range)
+            new_scatter.y("y_data", scale=shared_range)
+
+            # Configure coloring
+            if new_colors is not None:
+                new_scatter.color(by="colormap", map="viridis")
+            else:
+                new_scatter.opacity(by="density")
+
+            # Connect selection callback
+            try:
+                if hasattr(new_scatter, "widget") and hasattr(new_scatter.widget, "selection"):
+                    new_scatter.widget.observe(on_selection_change, names=["selection"])
+                elif hasattr(new_scatter, "selection"):
+                    new_scatter.observe(on_selection_change, names=["selection"])
+            except Exception as e:
+                print(f"Warning: Could not connect selection callback: {e}")
+
+            # Update the plot widget in the container
+            new_plot_widget = new_scatter.show()
+
+            # Update container children
+            container_children = list(container.children)
+            # Find and replace the plot widget (it should be the last one)
+            for i in range(len(container_children) - 1, -1, -1):
+                if hasattr(container_children[i], 'children') or str(type(container_children[i])).find('jscatter') >= 0:
+                    container_children[i] = new_plot_widget
+                    break
+
+            container.children = container_children
+
+            # Update references
+            current_scatter = new_scatter
+            current_plot_widget = new_plot_widget
+            scatter = new_scatter
+
+        except Exception as e:
+            print(f"Error updating plot: {e}")
+
+    # Connect dropdown callback
+    class_dropdown.observe(update_plot, names='value')
+
+    # Create layout with plot and dropdown
     plot_widget = scatter.show()
+    current_plot_widget = plot_widget
+
+    # Create filter controls
+    filter_controls = HBox([class_dropdown])
 
     if title:
         # Create container widget with title
         title_widget = widgets.HTML(f"<h3>{title}</h3>")
-        container = VBox([title_widget, plot_widget])
+        container = VBox([title_widget, filter_controls, plot_widget])
     elif x_label and y_label and not title:
         title_widget = widgets.HTML(f"<h3>{y_label} vs. {x_label}</h3>")
-        container = VBox([title_widget, plot_widget])
+        container = VBox([title_widget, filter_controls, plot_widget])
     else:
-        container = plot_widget
+        container = VBox([filter_controls, plot_widget])
 
     # Make the main container responsive
     if hasattr(container, 'layout'):
@@ -306,4 +455,5 @@ def scatterplot(
         "merged_data": merged_data,
         "container": container,
         "selection": get_selection,
+        "class_dropdown": class_dropdown,
     }
