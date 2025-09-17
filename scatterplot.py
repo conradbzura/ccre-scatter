@@ -49,7 +49,7 @@ def scatterplot(
     colormap: Callable | None = None
 ) -> Dict[str, Any]:
     """
-    Create a JScatter scatterplot with two datasets and interactive metadata table.
+    Create a JScatter scatterplot with two datasets and interactive selection.
 
     Parameters:
     -----------
@@ -58,7 +58,7 @@ def scatterplot(
     y : pd.DataFrame
         Dataset for X-axis values
     metadata : pd.DataFrame
-        Metadata describing the cCREs with columns: rDHS, cCRE, chrom, start, end, class
+        Metadata describing the cCREs with columns: rDHS, cCRE, chr, start, end, class
     join_column : str
         Column name to join the datasets on
     x_label : str, optional
@@ -67,26 +67,21 @@ def scatterplot(
         Custom label for Y-axis
     title : str, optional
         Custom title for the plot
-    colormap : str, optional
-        Method for density-based coloring. Options: 'knn', 'radius', 'kde', None
-        - 'knn': K-nearest neighbors density
-        - 'radius': Points within radius density
-        - 'kde': Kernel density estimation
+    colormap : Callable, optional
+        Function for density-based coloring. Use kde(), knn(), or radius() functions.
+        - kde(bandwidth=1): Kernel density estimation
+        - knn(k=100): K-nearest neighbors density
+        - radius(radius=1): Points within radius density
         - None: No density coloring (default)
-    density_params : dict, optional
-        Parameters for density calculation methods:
-        - For 'knn': {'k': int} (default k=10)
-        - For 'radius': {'radius': float} (default radius=0.1)
-        - For 'kde': {'bandwidth': float} (default bandwidth=0.1)
 
     Returns:
     --------
     Dict[str, Any]
         Dictionary containing:
         - 'scatter': The jscatter plot object
-        - 'metadata_table': The interactive metadata table widget
         - 'merged_data': The merged dataset used for plotting
-        - 'container': The complete widget container
+        - 'container': The plot container widget
+        - 'selection': Function that returns DataFrame of currently selected points
     """
 
     # Validate inputs
@@ -98,7 +93,7 @@ def scatterplot(
         raise ValueError(f"Column '{join_column}' not found in metadata")
 
     # Validate metadata columns
-    required_metadata_cols = ["rDHS", "cCRE", "chrom", "start", "end", "class"]
+    required_metadata_cols = ["rDHS", "cCRE", "chr", "start", "end", "class"]
     missing_cols = [
         col for col in required_metadata_cols if col not in metadata.columns
     ]
@@ -163,100 +158,8 @@ def scatterplot(
     if y_label is None:
         y_label = f"{y_col}"
 
-    # Create metadata table widget
-    metadata_display = merged_data[required_metadata_cols].copy()
-    metadata_table = widgets.HTML()
-
-    def update_metadata_table(selected_indices=None):
-        """Update the metadata table based on selection."""
-        if selected_indices is not None and len(selected_indices) > 0:
-            display_data = metadata_display.iloc[selected_indices]
-            table_title = (
-                f"<h4>Selected Points Metadata ({len(selected_indices)} points)</h4>"
-            )
-        else:
-            display_data = metadata_display
-            table_title = (
-                f"<h4>All Points Metadata ({len(metadata_display)} points)</h4>"
-            )
-
-        # Convert to HTML table
-        html_table = display_data.to_html(
-            index=False,
-            classes="table table-striped table-hover",
-            table_id="metadata-table",
-        )
-
-        # Add responsive styling with minimum width and flexible width
-        styled_html = f"""
-        <style>
-        .metadata-container {{
-            width: 99%;
-            min-width: 400px;
-            height: 500px;
-            border: 1px solid #ddd;
-            background-color: white;
-            flex: 1;
-            margin-left: 10px;
-        }}
-        .metadata-title {{
-            padding: 10px;
-            background-color: #f8f9fa;
-            border-bottom: 1px solid #ddd;
-            margin: 0;
-            font-size: 16px;
-            font-weight: bold;
-        }}
-        .metadata-table-container {{
-            height: 450px;
-            overflow-y: auto;
-            overflow-x: auto;
-            padding: 0;
-        }}
-        #metadata-table {{
-            font-family: Arial, sans-serif;
-            border-collapse: collapse;
-            width: 100%;
-            min-width: 380px;
-            margin: 0;
-        }}
-        #metadata-table th, #metadata-table td {{
-            text-align: left;
-            padding: 8px;
-            border-bottom: 1px solid #eee;
-            font-size: 12px;
-            white-space: nowrap;
-            min-width: fit-content;
-        }}
-        #metadata-table th {{
-            background-color: #f2f2f2;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }}
-        #metadata-table tr:hover {{
-            background-color: #f5f5f5;
-        }}
-        /* Column-specific widths */
-        #metadata-table th:nth-child(1), #metadata-table td:nth-child(1) {{ min-width: 80px; }} /* rDHS */
-        #metadata-table th:nth-child(2), #metadata-table td:nth-child(2) {{ min-width: 80px; }} /* cCRE */
-        #metadata-table th:nth-child(3), #metadata-table td:nth-child(3) {{ min-width: 60px; }} /* chrom */
-        #metadata-table th:nth-child(4), #metadata-table td:nth-child(4) {{ min-width: 80px; }} /* start */
-        #metadata-table th:nth-child(5), #metadata-table td:nth-child(5) {{ min-width: 80px; }} /* end */
-        #metadata-table th:nth-child(6), #metadata-table td:nth-child(6) {{ min-width: 80px; }} /* class */
-        </style>
-        <div class="metadata-container">
-            <div class="metadata-title">{table_title.replace("<h4>", "").replace("</h4>", "")}</div>
-            <div class="metadata-table-container">
-                {html_table}
-            </div>
-        </div>
-        """
-
-        metadata_table.value = styled_html
-
-    # Initialize metadata table
-    update_metadata_table()
+    # Create selection tracking for selected points
+    selected_data = pd.DataFrame()  # Will hold selected points data
 
     # Calculate shared axis limits for equal coordinate systems
     x_min, x_max = x_coords.min(), x_coords.max()
@@ -337,18 +240,20 @@ def scatterplot(
     # Set up selection callback for lasso selection
     def on_selection_change(change):
         """Callback for when selection changes in the scatter plot."""
-        print(f"Selection change detected: {change}")  # Debug
+        nonlocal selected_data
         # Get the new selection indices
         selected_indices = change.get("new", [])
-        print(f"Selected indices: {selected_indices}")  # Debug
         if selected_indices is not None and len(selected_indices) > 0:
             # Convert to list if it's a numpy array
             if hasattr(selected_indices, "tolist"):
                 selected_indices = selected_indices.tolist()
-            update_metadata_table(selected_indices)
+            # Update selected_data with the selected points
+            selected_data = merged_data.iloc[selected_indices].copy()
+            print(f"Selected {len(selected_indices)} points")
         else:
-            # No selection - show all data
-            update_metadata_table()
+            # No selection - empty DataFrame
+            selected_data = pd.DataFrame()
+            print("No points selected")
 
     # Connect selection callback for jupyter-scatter
     try:
@@ -370,43 +275,35 @@ def scatterplot(
         print(f"Warning: Could not connect selection callback: {e}")
         print("Lasso selection updates may not work automatically")
 
-    # Create flexible HBox layout
+    # Create layout with just the plot
     plot_widget = scatter.show()
-    # plot_widget.layout.width = '500px'  # Fixed width for plot (updated to match scatter dimensions)
-    # plot_widget.layout.flex = '0 0 500px'  # Don't grow or shrink
-    # plot_widget.layout.margin = '10px'  # Add margin around plot
-
-    metadata_table.layout.flex = "1 1 400px"  # Grow to fill space, min 400px
-    metadata_table.layout.min_width = "400px"
-    # metadata_table.layout.margin = '10px'  # Add margin around table
-
-    plot_and_table = HBox([plot_widget, metadata_table])
-
-    # Make the HBox fill available width
-    plot_and_table.layout.width = "100%"
-    plot_and_table.layout.align_items = "flex-start"
 
     if title:
-        # Create container widget with side-by-side layout
+        # Create container widget with title
         title_widget = widgets.HTML(f"<h3>{title}</h3>")
-        container = VBox([title_widget, plot_and_table])
+        container = VBox([title_widget, plot_widget])
     elif x_label and y_label and not title:
         title_widget = widgets.HTML(f"<h3>{y_label} vs. {x_label}</h3>")
-        container = VBox([title_widget, plot_and_table])
+        container = VBox([title_widget, plot_widget])
     else:
-        container = plot_and_table
+        container = plot_widget
 
     # Make the main container responsive
-    container.layout.width = "100%"
-    container.layout.padding = "18px"  # Add padding to container
+    if hasattr(container, 'layout'):
+        container.layout.width = "100%"
+        container.layout.padding = "18px"  # Add padding to container
 
     # Display the container
     display(container)
 
+    # Create selection handle that returns currently selected data
+    def get_selection():
+        """Return DataFrame of currently selected points, empty if none selected"""
+        return selected_data.copy() if not selected_data.empty else pd.DataFrame()
+
     return {
         "scatter": scatter,
-        "metadata_table": metadata_table,
         "merged_data": merged_data,
         "container": container,
-        "update_metadata_callback": update_metadata_table,
+        "selection": get_selection,
     }
