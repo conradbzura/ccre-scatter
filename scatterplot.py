@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict
+from typing import Any, Callable, NamedTuple
 
 import ipywidgets as widgets
 import jscatter
@@ -8,6 +8,15 @@ import polars as pl
 from IPython.display import display
 from ipywidgets import HBox, VBox
 from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
+
+
+class ScatterplotResult(NamedTuple):
+    """Named tuple for scatterplot function return value."""
+    scatter: Any
+    merged_data: pl.DataFrame
+    container: Any
+    selection: Callable[[], pl.DataFrame]
+    class_dropdown: Any
 
 
 def kde(bandwidth=1):
@@ -52,7 +61,7 @@ def scatterplot(
     title: str | None = None,
     colormap: Callable | None = None,
     default_class: str = "TF",
-) -> Dict[str, Any]:
+) -> ScatterplotResult:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
 
@@ -87,13 +96,13 @@ def scatterplot(
 
     Returns:
     --------
-    Dict[str, Any]
-        Dictionary containing:
-        - 'scatter': The jscatter plot object
-        - 'merged_data': The merged dataset used for plotting
-        - 'container': The plot container widget
-        - 'selection': Function that returns DataFrame of currently selected points
-        - 'class_dropdown': The class filter dropdown widget
+    ScatterplotResult
+        Named tuple containing:
+        - scatter: The jscatter plot object
+        - merged_data: The merged dataset used for plotting
+        - container: The plot container widget
+        - selection: Function that returns DataFrame of currently selected points
+        - class_dropdown: The class filter dropdown widget
     """
 
     # Validate inputs
@@ -494,10 +503,10 @@ def scatterplot(
         """Return DataFrame of currently selected points, empty if none selected"""
         return selected_data.clone() if len(selected_data) > 0 else pl.DataFrame()
 
-    return {
-        "scatter": scatter,
-        "merged_data": merged_data,
-        "container": container,
-        "selection": get_selection,
-        "class_dropdown": class_dropdown,
-    }
+    return ScatterplotResult(
+        scatter=scatter,
+        merged_data=merged_data,
+        container=container,
+        selection=get_selection,
+        class_dropdown=class_dropdown,
+    )
