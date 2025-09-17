@@ -1,5 +1,6 @@
-from typing import Optional, Dict, Any, Callable
-import pandas as pd
+from typing import Dict, Any, Callable
+import polars as pl
+import pandas as pd  # Keep for jscatter compatibility
 import jscatter
 import numpy as np
 from IPython.display import display
@@ -14,6 +15,7 @@ def kde(bandwidth=1):
         kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(points)
         log_density = kde.score_samples(points)
         return np.exp(log_density)  # Convert from log density
+
     return calculate_kde_density
 
 
@@ -35,30 +37,34 @@ def radius(radius=1):
         tree = KDTree(points)
         counts = tree.query_radius(points, r=radius, count_only=True)
         return np.array(counts, dtype=float)
+
     return calculate_radius_density
 
 
 def scatterplot(
-    x: pd.DataFrame,
-    y: pd.DataFrame,
-    metadata: pd.DataFrame,
+    x: pl.DataFrame,
+    y: pl.DataFrame,
+    metadata: pl.DataFrame,
     join_column: str,
     x_label: str | None = None,
     y_label: str | None = None,
     title: str | None = None,
-    colormap: Callable | None = None,
-    default_class: str = "TF"
+    colormap: Callable | None = radius(1),
+    default_class: str = "TF",
 ) -> Dict[str, Any]:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
 
+    Note: This function uses Polars DataFrames for efficient data processing, but
+    internally converts to Pandas DataFrames where needed for jscatter compatibility.
+
     Parameters:
     -----------
-    x : pd.DataFrame
+    x : pl.DataFrame
         Dataset for Y-axis values
-    y : pd.DataFrame
+    y : pl.DataFrame
         Dataset for X-axis values
-    metadata : pd.DataFrame
+    metadata : pl.DataFrame
         Metadata describing the cCREs with columns: rDHS, cCRE, chr, start, end, class
     join_column : str
         Column name to join the datasets on
@@ -106,40 +112,38 @@ def scatterplot(
 
     # Merge datasets
     # First merge x and y
-    merged_xy = pd.merge(x, y, on=join_column, how="inner", suffixes=("_x", "_y"))
+    merged_xy = x.join(y, on=join_column, how="inner", suffix="_y")
 
     # Then merge with metadata
-    full_merged_data = pd.merge(merged_xy, metadata, on=join_column, how="inner")
+    full_merged_data = merged_xy.join(metadata, on=join_column, how="inner")
 
     if len(full_merged_data) == 0:
         raise ValueError("No matching records found between datasets")
 
     # Get unique classes for dropdown
-    available_classes = sorted(full_merged_data["class"].unique())
+    available_classes = sorted(full_merged_data["class"].unique().to_list())
 
     # Validate default_class
     if default_class not in available_classes:
-        print(f"Warning: default_class '{default_class}' not found in data. Available classes: {available_classes}")
+        print(
+            f"Warning: default_class '{default_class}' not found in data. Available classes: {available_classes}"
+        )
         if available_classes:
             default_class = available_classes[0]
         else:
             raise ValueError("No class data available for filtering")
 
     # Initially filter by default class
-    merged_data = full_merged_data[full_merged_data["class"] == default_class].copy()
+    merged_data = full_merged_data.filter(pl.col("class") == default_class)
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
     # (excluding the join column)
     x_cols = [
-        col
-        for col in x.columns
-        if col != join_column and pd.api.types.is_numeric_dtype(x[col])
+        col for col in x.columns if col != join_column and x[col].dtype.is_numeric()
     ]
     y_cols = [
-        col
-        for col in y.columns
-        if col != join_column and pd.api.types.is_numeric_dtype(y[col])
+        col for col in y.columns if col != join_column and y[col].dtype.is_numeric()
     ]
 
     if not x_cols:
@@ -149,26 +153,31 @@ def scatterplot(
 
     # Use the first numeric column from each dataset, with suffix handling
     y_col = x_cols[0]
-    if y_col + "_x" in merged_data.columns:
-        y_col = y_col + "_x"
+    if y_col in merged_data.columns and y_col + "_y" in merged_data.columns:
+        y_col = y_col  # Use the original column from x
+    elif y_col + "_y" in merged_data.columns:
+        # Column was renamed during join, but we want the one from x (no suffix in Polars join)
+        pass
 
     x_col = y_cols[0]
     if x_col + "_y" in merged_data.columns:
         x_col = x_col + "_y"
 
     # Extract coordinates and ensure they are proper 1D arrays
-    x_coords = merged_data[x_col].values.ravel()
-    y_coords = merged_data[y_col].values.ravel()
+    x_coords = merged_data[x_col].to_numpy().ravel()
+    y_coords = merged_data[y_col].to_numpy().ravel()
 
     # Ensure we have valid numeric data
     if len(x_coords) == 0 or len(y_coords) == 0:
         raise ValueError("No data points to plot")
 
     # Remove any NaN values
-    valid_mask = ~(pd.isna(x_coords) | pd.isna(y_coords))
+    valid_mask = ~(np.isnan(x_coords) | np.isnan(y_coords))
     x_coords = x_coords[valid_mask]
     y_coords = y_coords[valid_mask]
-    merged_data = merged_data[valid_mask]
+    # Convert boolean mask to row indices for Polars filtering
+    valid_indices = np.where(valid_mask)[0]
+    merged_data = merged_data[valid_indices]
 
     # Set default labels
     if x_label is None:
@@ -177,7 +186,7 @@ def scatterplot(
         y_label = f"{y_col}"
 
     # Create selection tracking for selected points
-    selected_data = pd.DataFrame()  # Will hold selected points data
+    selected_data = pl.DataFrame()  # Will hold selected points data
 
     # Storage for current plot components
     current_scatter = None
@@ -188,14 +197,16 @@ def scatterplot(
         nonlocal current_scatter, current_plot_widget, selected_data
 
         # Extract coordinates for the filtered data
-        filter_x_coords = filtered_data[x_col].values.ravel()
-        filter_y_coords = filtered_data[y_col].values.ravel()
+        filter_x_coords = filtered_data[x_col].to_numpy().ravel()
+        filter_y_coords = filtered_data[y_col].to_numpy().ravel()
 
         # Remove any NaN values
-        valid_mask = ~(pd.isna(filter_x_coords) | pd.isna(filter_y_coords))
+        valid_mask = ~(np.isnan(filter_x_coords) | np.isnan(filter_y_coords))
         filter_x_coords = filter_x_coords[valid_mask]
         filter_y_coords = filter_y_coords[valid_mask]
-        filtered_data_clean = filtered_data[valid_mask]
+        # Convert boolean mask to row indices for Polars filtering
+        valid_indices = np.where(valid_mask)[0]
+        filtered_data_clean = filtered_data[valid_indices]
 
         if len(filter_x_coords) == 0:
             print("No valid data points for the selected class")
@@ -214,7 +225,9 @@ def scatterplot(
         axis_min = overall_min - padding
         axis_max = overall_max + padding
 
-        print(f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]")
+        print(
+            f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]"
+        )
         print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
 
         # Calculate density if requested
@@ -223,7 +236,14 @@ def scatterplot(
             points = np.column_stack([filter_x_coords, filter_y_coords])
             colors = colormap(points)
 
-        return filter_x_coords, filter_y_coords, filtered_data_clean, colors, axis_min, axis_max
+        return (
+            filter_x_coords,
+            filter_y_coords,
+            filtered_data_clean,
+            colors,
+            axis_min,
+            axis_max,
+        )
 
     # Initial plot creation
     plot_result = create_plot(merged_data)
@@ -297,38 +317,28 @@ def scatterplot(
             if hasattr(selected_indices, "tolist"):
                 selected_indices = selected_indices.tolist()
             # Update selected_data with the selected points
-            selected_data = merged_data.iloc[selected_indices].copy()
+            selected_data = merged_data[selected_indices]
             print(f"Selected {len(selected_indices)} points")
         else:
             # No selection - empty DataFrame
-            selected_data = pd.DataFrame()
+            selected_data = pl.DataFrame()
             print("No points selected")
 
     # Connect selection callback for jupyter-scatter
-    try:
+    if hasattr(scatter, "widget") and hasattr(scatter.widget, "selection"):
         # Based on jupyter-scatter documentation, use scatter.widget.selection
-        if hasattr(scatter, "widget") and hasattr(scatter.widget, "selection"):
-            print("Connecting to scatter.widget.selection trait")
-            scatter.widget.observe(on_selection_change, names=["selection"])
-        elif hasattr(scatter, "selection"):
-            print("Connecting to scatter.selection trait")
-            scatter.observe(on_selection_change, names=["selection"])
-        else:
-            # Fallback: check if scatter itself has the selection trait
-            print(
-                f"Available traits on scatter: {scatter.trait_names() if hasattr(scatter, 'trait_names') else 'no trait_names method'}"
-            )
-            print("Could not find selection trait - selection updates may not work")
-
-    except Exception as e:
-        print(f"Warning: Could not connect selection callback: {e}")
-        print("Lasso selection updates may not work automatically")
+        scatter.widget.observe(on_selection_change, names=["selection"])
+    elif hasattr(scatter, "selection"):
+        scatter.observe(on_selection_change, names=["selection"])
+    else:
+        # Fallback: check if scatter itself has the selection trait
+        print("Could not find selection trait - selection updates may not work")
 
     # Create class filter dropdown
     class_dropdown = widgets.Dropdown(
         options=available_classes,
         value=default_class,
-        description='Class:',
+        description="Class:",
         disabled=False,
     )
 
@@ -336,11 +346,11 @@ def scatterplot(
         """Update the plot when class filter changes"""
         nonlocal current_scatter, current_plot_widget, merged_data, scatter
 
-        selected_class = change['new']
+        selected_class = change["new"]
         print(f"Filtering by class: {selected_class}")
 
         # Filter the data
-        filtered_data = full_merged_data[full_merged_data["class"] == selected_class].copy()
+        filtered_data = full_merged_data.filter(pl.col("class") == selected_class)
 
         if len(filtered_data) == 0:
             print(f"No data available for class: {selected_class}")
@@ -351,7 +361,14 @@ def scatterplot(
         if plot_result is None:
             return
 
-        new_x_coords, new_y_coords, new_merged_data, new_colors, new_axis_min, new_axis_max = plot_result
+        (
+            new_x_coords,
+            new_y_coords,
+            new_merged_data,
+            new_colors,
+            new_axis_min,
+            new_axis_max,
+        ) = plot_result
 
         # Update the merged_data for selection callbacks
         merged_data = new_merged_data
@@ -389,7 +406,9 @@ def scatterplot(
 
             # Connect selection callback
             try:
-                if hasattr(new_scatter, "widget") and hasattr(new_scatter.widget, "selection"):
+                if hasattr(new_scatter, "widget") and hasattr(
+                    new_scatter.widget, "selection"
+                ):
                     new_scatter.widget.observe(on_selection_change, names=["selection"])
                 elif hasattr(new_scatter, "selection"):
                     new_scatter.observe(on_selection_change, names=["selection"])
@@ -403,7 +422,10 @@ def scatterplot(
             container_children = list(container.children)
             # Find and replace the plot widget (it should be the last one)
             for i in range(len(container_children) - 1, -1, -1):
-                if hasattr(container_children[i], 'children') or str(type(container_children[i])).find('jscatter') >= 0:
+                if (
+                    hasattr(container_children[i], "children")
+                    or str(type(container_children[i])).find("jscatter") >= 0
+                ):
                     container_children[i] = new_plot_widget
                     break
 
@@ -418,7 +440,7 @@ def scatterplot(
             print(f"Error updating plot: {e}")
 
     # Connect dropdown callback
-    class_dropdown.observe(update_plot, names='value')
+    class_dropdown.observe(update_plot, names="value")
 
     # Create layout with plot and dropdown
     plot_widget = scatter.show()
@@ -438,7 +460,7 @@ def scatterplot(
         container = VBox([filter_controls, plot_widget])
 
     # Make the main container responsive
-    if hasattr(container, 'layout'):
+    if hasattr(container, "layout"):
         container.layout.width = "100%"
         container.layout.padding = "18px"  # Add padding to container
 
@@ -448,7 +470,7 @@ def scatterplot(
     # Create selection handle that returns currently selected data
     def get_selection():
         """Return DataFrame of currently selected points, empty if none selected"""
-        return selected_data.copy() if not selected_data.empty else pd.DataFrame()
+        return selected_data.clone() if len(selected_data) > 0 else pl.DataFrame()
 
     return {
         "scatter": scatter,
