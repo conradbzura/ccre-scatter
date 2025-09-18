@@ -106,7 +106,7 @@ def scatterplot(
     y_label: str | None = None,
     title: str | None = None,
     colormap: Callable | None = None,
-    default_class: str = "All",
+    default_category: str = "All",
 ) -> ScatterplotResult:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
@@ -138,7 +138,7 @@ def scatterplot(
         - knn(k=100): K-nearest neighbors density
         - radius(radius=1): Points within radius density
         - None: Use class-based coloring (default)
-    default_class : str, default "All"
+    default_category : str, default "All"
         Default class to filter by on initial display. Use "All" to show all classes.
         A dropdown will allow changing the class filter.
 
@@ -227,21 +227,21 @@ def scatterplot(
     for i, cls in enumerate(unique_classes):
         class_color_map[cls] = class_color_list[i]
 
-    # Validate default_class
-    if default_class not in available_classes:
+    # Validate default_category
+    if default_category not in available_classes:
         print(
-            f"Warning: default_class '{default_class}' not found in data. Available classes: {available_classes}"
+            f"Warning: default_category '{default_category}' not found in data. Available classes: {available_classes}"
         )
         if available_classes:
-            default_class = available_classes[0]
+            default_category = available_classes[0]
         else:
             raise ValueError("No class data available for filtering")
 
     # Initially filter by default class
-    if default_class == "All":
+    if default_category == "All":
         merged_data = full_merged_data
     else:
-        merged_data = full_merged_data.filter(pl.col(category_column) == default_class)
+        merged_data = full_merged_data.filter(pl.col(category_column) == default_category)
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
@@ -314,11 +314,11 @@ def scatterplot(
         points = np.column_stack([all_x_coords, all_y_coords])
         complete_plot_df["colormap"] = colormap(points)
 
-    # Set default labels
+    # Set default labels using actual column names from the data
     if x_label is None:
-        x_label = f"{x_col}"
+        x_label = x_col
     if y_label is None:
-        y_label = f"{y_col}"
+        y_label = y_col
 
     # Create selection tracking for selected points
     selected_data = pl.DataFrame()  # Will hold selected points data
@@ -365,7 +365,7 @@ def scatterplot(
         return plot_df, axis_min, axis_max
 
     # Initial plot creation
-    plot_result = create_plot(default_class)
+    plot_result = create_plot(default_category)
     if plot_result is None:
         raise ValueError("No valid data points to plot")
 
@@ -429,6 +429,9 @@ def scatterplot(
         scatter.x("x_data", scale=shared_range)
         scatter.y("y_data", scale=shared_range)
 
+        # Set axis labels using the axes() method
+        scatter.axes(axes=True, grid=True, labels=[x_label, y_label])
+
         # Workaround for jupyter-scatter Button widget bug
         # Add missing _dblclick_handler attribute to prevent AttributeError
         try:
@@ -472,7 +475,7 @@ def scatterplot(
     # Create class filter dropdown
     class_dropdown = widgets.Dropdown(
         options=available_classes,
-        value=default_class,
+        value=default_category,
         description="Class:",
         disabled=False,
     )
@@ -605,13 +608,11 @@ def scatterplot(
         plot_with_legend = plot_widget
 
     if title:
-        # Create container widget with title
+        # Create container widget with user-specified title
         title_widget = widgets.HTML(f"<h3>{title}</h3>")
         container = VBox([title_widget, filter_controls, plot_with_legend])
-    elif x_label and y_label and not title:
-        title_widget = widgets.HTML(f"<h3>{y_label}</h3> vs. <h3>{x_label}</h3>")
-        container = VBox([title_widget, filter_controls, plot_with_legend])
     else:
+        # No title - just the controls and plot
         container = VBox([filter_controls, plot_with_legend])
 
     # Make the main container responsive

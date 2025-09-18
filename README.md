@@ -99,7 +99,7 @@ Creates an interactive scatter plot with categorical coloring and filtering.
 - `y_label` (str, optional): Custom Y-axis label
 - `title` (str, optional): Custom plot title
 - `colormap` (Callable, optional): Density function for coloring (kde(), knn(), radius())
-- `default_class` (str, default="All"): Initial class filter
+- `default_category` (str, default="All"): Initial class filter
 
 **Returns:**
 
