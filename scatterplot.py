@@ -117,9 +117,9 @@ def scatterplot(
     Parameters:
     -----------
     x : pl.DataFrame
-        Dataset for Y-axis values
-    y : pl.DataFrame
         Dataset for X-axis values
+    y : pl.DataFrame
+        Dataset for Y-axis values
     metadata : pl.DataFrame
         Metadata describing the cCREs with columns including the category column
     join_column : str
@@ -187,7 +187,9 @@ def scatterplot(
     available_classes = ["All"] + unique_classes
 
     # Create interpolated colormap based on number of unique categories
-    def create_interpolated_colormap(n_categories: int) -> tuple[list[str], dict[str, str]]:
+    def create_interpolated_colormap(
+        n_categories: int,
+    ) -> tuple[list[str], dict[str, str]]:
         """Create an interpolated colormap with exactly n_categories colors."""
         # Base color palette for interpolation
         base_colors = [
@@ -212,7 +214,9 @@ def scatterplot(
             )
             # Sample colors evenly across the colormap
             selected_colors = [
-                plt.colors.rgb2hex(cmap(i / (n_categories - 1) if n_categories > 1 else 0))
+                plt.colors.rgb2hex(
+                    cmap(i / (n_categories - 1) if n_categories > 1 else 0)
+                )
                 for i in range(n_categories)
             ]
 
@@ -241,7 +245,9 @@ def scatterplot(
     if default_category == "All":
         merged_data = full_merged_data
     else:
-        merged_data = full_merged_data.filter(pl.col(category_column) == default_category)
+        merged_data = full_merged_data.filter(
+            pl.col(category_column) == default_category
+        )
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
@@ -259,16 +265,16 @@ def scatterplot(
         raise ValueError("No numeric columns found in y for plotting")
 
     # Use the first numeric column from each dataset, with suffix handling
-    y_col = x_cols[0]
-    if y_col in merged_data.columns and y_col + "_y" in merged_data.columns:
-        y_col = y_col  # Use the original column from x
-    elif y_col + "_y" in merged_data.columns:
+    x_col = x_cols[0]
+    if x_col in merged_data.columns and x_col + "_y" in merged_data.columns:
+        x_col = x_col  # Use the original column from x
+    elif x_col + "_y" in merged_data.columns:
         # Column was renamed during join, but we want the one from x (no suffix in Polars join)
         pass
 
-    x_col = y_cols[0]
-    if x_col + "_y" in merged_data.columns:
-        x_col = x_col + "_y"
+    y_col = y_cols[0]
+    if y_col + "_y" in merged_data.columns:
+        y_col = y_col + "_y"
 
     # Extract coordinates and ensure they are proper 1D arrays
     x_coords = merged_data[x_col].to_numpy().ravel()
@@ -299,14 +305,16 @@ def scatterplot(
 
     # Create complete plot DataFrame with properly formatted categorical data
     complete_plot_df = pd.DataFrame(
-        {"x_data": all_x_coords, "y_data": all_y_coords, category_column: all_class_data}
+        {
+            "x_data": all_x_coords,
+            "y_data": all_y_coords,
+            category_column: all_class_data,
+        }
     )
 
     # Ensure categorical column has consistent categories for all possible classes
     complete_plot_df[category_column] = pd.Categorical(
-        complete_plot_df[category_column],
-        categories=unique_classes,
-        ordered=True
+        complete_plot_df[category_column], categories=unique_classes, ordered=True
     )
 
     if colormap is not None:
@@ -335,7 +343,9 @@ def scatterplot(
         if selected_class == "All":
             plot_df = complete_plot_df
         else:
-            plot_df = complete_plot_df[complete_plot_df[category_column] == selected_class]
+            plot_df = complete_plot_df[
+                complete_plot_df[category_column] == selected_class
+            ]
 
         if len(plot_df) == 0:
             print(f"No valid data points for class: {selected_class}")
@@ -404,7 +414,7 @@ def scatterplot(
                 axes_grid=True,
                 annotations=[diagonal_line],
                 color_by="colormap",
-                color_map="viridis"
+                color_map="viridis",
             )
         else:
             # Use class-based coloring with predefined color list
@@ -421,7 +431,7 @@ def scatterplot(
                 axes_grid=True,
                 annotations=[diagonal_line],
                 color_by=category_column,
-                color_map=class_color_list
+                color_map=class_color_list,
             )
 
         # Set identical axis ranges using the scale parameter
@@ -430,6 +440,7 @@ def scatterplot(
         scatter.y("y_data", scale=shared_range)
 
         # Set axis labels using the axes() method
+        # Try to configure axes with better spacing
         scatter.axes(axes=True, grid=True, labels=[x_label, y_label])
 
         # Workaround for jupyter-scatter Button widget bug
@@ -494,96 +505,17 @@ def scatterplot(
 
         new_plot_df, new_axis_min, new_axis_max = plot_result
 
-        # Update existing scatter plot in-place instead of recreating widget
-        try:
-            # Use scatter.data() now that we're using list-based color mapping
-            # Disable animation and keep existing scales
-            scatter.data(new_plot_df, reset_scales=False, animate=False)
+        # Use scatter.data() now that we're using list-based color mapping
+        # Disable animation and keep existing scales
+        scatter.data(new_plot_df, reset_scales=False, animate=False)
 
-            # Keep the original axis ranges static - don't recalculate based on filtered data
-            # This prevents zooming/panning animation between class changes
-            original_shared_range = (axis_min, axis_max)
-            scatter.x("x_data", scale=original_shared_range)
-            scatter.y("y_data", scale=original_shared_range)
+        # Keep the original axis ranges static - don't recalculate based on filtered data
+        # This prevents zooming/panning animation between class changes
+        original_shared_range = (axis_min, axis_max)
+        scatter.x("x_data", scale=original_shared_range)
+        scatter.y("y_data", scale=original_shared_range)
 
-            print(f"Updated plot in-place for class: {selected_class}")
-
-        except Exception as e:
-            raise
-            print(f"Error updating plot in-place: {e}")
-            print("Falling back to widget recreation...")
-
-            # Fallback to original method if in-place update fails
-            try:
-                # Create diagonal line annotation extending far beyond data range
-                new_data_range = new_axis_max - new_axis_min
-                new_line_extend = new_data_range * 50  # Extend 50x beyond each side
-                new_line_min = new_axis_min - new_line_extend
-                new_line_max = new_axis_max + new_line_extend
-                # Style to match typical grid lines: light gray, thin
-                new_diagonal_line = jscatter.Line(
-                    [(new_line_min, new_line_min), (new_line_max, new_line_max)],
-                    line_color="#e0e0e0",
-                    line_width=1,
-                )
-
-                # Create new scatter plot
-                new_scatter = jscatter.Scatter(
-                    data=new_plot_df,
-                    x="x_data",
-                    y="y_data",
-                    x_label=x_label,
-                    y_label=y_label,
-                    width=500,
-                    height=500,
-                    aspect_ratio=1.0,
-                    axes=True,
-                    axes_grid=True,
-                    annotations=[new_diagonal_line],
-                )
-
-                # Set axis ranges
-                shared_range = (new_axis_min, new_axis_max)
-                new_scatter.x("x_data", scale=shared_range)
-                new_scatter.y("y_data", scale=shared_range)
-
-                # Configure coloring
-                if colormap is not None and "colormap" in new_plot_df.columns:
-                    new_scatter.color(by="colormap", map="viridis")
-                else:
-                    new_scatter.color(by=category_column, map=class_color_list)
-
-                # Connect selection callback
-                if hasattr(new_scatter, "widget") and hasattr(
-                    new_scatter.widget, "selection"
-                ):
-                    new_scatter.widget.observe(on_selection_change, names=["selection"])
-
-                # Replace widget
-                new_plot_widget = new_scatter.show()
-                container_children = list(container.children)
-
-                for i in range(len(container_children) - 1, -1, -1):
-                    if hasattr(container_children[i], "children"):
-                        plot_legend_children = list(container_children[i].children)
-                        if len(plot_legend_children) > 0:
-                            container_children[i].children = [
-                                new_plot_widget
-                            ] + plot_legend_children[1:]
-                        break
-                    elif str(type(container_children[i])).find("jscatter") >= 0:
-                        container_children[i] = new_plot_widget
-                        break
-
-                container.children = container_children
-
-                # Update references
-                scatter = new_scatter
-                current_scatter = new_scatter
-                current_plot_widget = new_plot_widget
-
-            except Exception as fallback_error:
-                print(f"Fallback also failed: {fallback_error}")
+        print(f"Updated plot in-place for class: {selected_class}")
 
     # Connect dropdown callback
     class_dropdown.observe(update_plot, names="value")
@@ -591,6 +523,10 @@ def scatterplot(
     # Create layout with plot and dropdown
     plot_widget = scatter.show()
     current_plot_widget = plot_widget
+
+    # Add some right padding to the plot to give axis labels more space
+    if hasattr(plot_widget, "layout"):
+        plot_widget.layout.padding = "0 20px 0 0"  # Right padding for axis labels
 
     # Create legend for class colors (only when using class-based coloring)
     legend_widget = None
@@ -602,8 +538,12 @@ def scatterplot(
 
     # Create plot area with legend positioned to the right
     if legend_widget:
+        # Add spacing between plot and legend
+        legend_widget.layout.margin = "0 0 0 20px"  # Left margin for spacing from plot
         # Create a container with plot on left and legend on right
         plot_with_legend = HBox([plot_widget, legend_widget])
+        # Ensure proper spacing in the HBox
+        plot_with_legend.layout.align_items = "flex-start"
     else:
         plot_with_legend = plot_widget
 
