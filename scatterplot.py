@@ -22,7 +22,7 @@ class ScatterplotResult(NamedTuple):
     class_dropdown: Any
 
 
-def kde(bandwidth=1):
+def kde(bandwidth=1.0):
     def calculate_kde_density(points):
         """Calculate density using Gaussian kernel"""
         kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(points)
@@ -44,7 +44,7 @@ def knn(k=100):
     return calculate_knn_density
 
 
-def radius(radius=1):
+def radius(radius=1.0):
     def calculate_radius_density(points):
         """Calculate density based on points within radius"""
         tree = KDTree(points)
