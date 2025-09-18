@@ -12,6 +12,7 @@ from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
 
 class ScatterplotResult(NamedTuple):
     """Named tuple for scatterplot function return value."""
+
     scatter: Any
     merged_data: pl.DataFrame
     container: Any
@@ -49,6 +50,48 @@ def radius(radius=1):
         return np.array(counts, dtype=float)
 
     return calculate_radius_density
+
+
+def create_class_legend(unique_classes, class_color_map):
+    """
+    Create a legend widget showing class colors.
+
+    Parameters:
+    -----------
+    unique_classes : list
+        List of unique class names
+    class_color_map : dict
+        Mapping of class names to colors
+
+    Returns:
+    --------
+    ipywidgets.VBox
+        Legend widget
+    """
+    legend_items = []
+    for cls in unique_classes:
+        color = class_color_map[cls]
+        legend_items.append(
+            widgets.HTML(
+                f'<div style="display: flex; align-items: center; margin: 2px 0;">'
+                f'<div style="width: 12px; height: 12px; background-color: {color}; '
+                f'border: 1px solid #ccc; margin-right: 8px; border-radius: 2px;"></div>'
+                f'<span style="font-size: 12px;">{cls}</span></div>'
+            )
+        )
+
+    legend_box = VBox(legend_items)
+    legend_box.layout.padding = "8px"
+    legend_box.layout.border = "1px solid #ddd"
+    legend_box.layout.border_radius = "4px"
+    legend_box.layout.background_color = "#f9f9f9"
+    legend_box.layout.width = "auto"
+    legend_box.layout.max_width = "200px"
+
+    legend_title = widgets.HTML(
+        '<div style="font-weight: bold; margin-bottom: 4px; font-size: 13px;">cCRE Class Legend</div>'
+    )
+    return VBox([legend_title, legend_box])
 
 
 def scatterplot(
@@ -147,10 +190,13 @@ def scatterplot(
         "#007bd8",  # Blue
     ]
 
-    # Create mapping of class to color
-    class_color_map = {}
+    # Create mapping of class to color - use list for jscatter compatibility
+    class_color_list = []
+    class_color_map = {}  # Keep dict for legend creation
     for i, cls in enumerate(unique_classes):
-        class_color_map[cls] = color_palette[i % len(color_palette)]
+        color = color_palette[i % len(color_palette)]
+        class_color_list.append(color)
+        class_color_map[cls] = color  # Keep for legend
 
     # Validate default_class
     if default_class not in available_classes:
@@ -222,20 +268,22 @@ def scatterplot(
     all_y_coords = full_merged_clean[y_col].to_numpy().ravel()
     all_class_data = full_merged_clean["class"].to_numpy()
 
-    # Create complete plot DataFrame with colors for all cCREs
-    complete_plot_df = pd.DataFrame({
-        "x_data": all_x_coords,
-        "y_data": all_y_coords,
-        "class": all_class_data
-    })
+    # Create complete plot DataFrame with properly formatted categorical data
+    complete_plot_df = pd.DataFrame(
+        {"x_data": all_x_coords, "y_data": all_y_coords, "class": all_class_data}
+    )
+
+    # Ensure categorical column has consistent categories for all possible classes
+    complete_plot_df["class"] = pd.Categorical(
+        complete_plot_df["class"],
+        categories=unique_classes,
+        ordered=True
+    )
 
     if colormap is not None:
         # Use density-based coloring for all points
         points = np.column_stack([all_x_coords, all_y_coords])
         complete_plot_df["colormap"] = colormap(points)
-    else:
-        # Use class-based static coloring for all points
-        complete_plot_df["color"] = [class_color_map[cls] for cls in all_class_data]
 
     # Set default labels
     if x_label is None:
@@ -298,36 +346,59 @@ def scatterplot(
     try:
         # plot_df is already prepared with all necessary data and colors
 
-        # Create scatter plot using the correct API with square aspect ratio
-        scatter = jscatter.Scatter(
-            data=plot_df,
-            x="x_data",
-            y="y_data",
-            x_label=x_label,
-            y_label=y_label,
-            width=500,
-            height=500,
-            aspect_ratio=1.0,  # Square aspect ratio
-            axes=True,  # Enable axes
-            axes_grid=True,  # Show grid lines
+        # Create diagonal line annotation extending far beyond data range
+        # Use 100x the data range to ensure it remains visible during panning
+        data_range = axis_max - axis_min
+        line_extend = data_range * 50  # Extend 50x beyond each side
+        line_min = axis_min - line_extend
+        line_max = axis_max + line_extend
+        # Style to match typical grid lines: light gray, thin
+        diagonal_line = jscatter.Line(
+            [(line_min, line_min), (line_max, line_max)],
+            line_color="#e0e0e0",
+            line_width=1,
         )
+
+        # Create scatter plot using the correct API with square aspect ratio
+        if colormap is not None and "colormap" in plot_df.columns:
+            # Use density-based coloring
+            scatter = jscatter.Scatter(
+                data=plot_df,
+                x="x_data",
+                y="y_data",
+                x_label=x_label,
+                y_label=y_label,
+                width=500,
+                height=500,
+                aspect_ratio=1.0,
+                axes=True,
+                axes_grid=True,
+                annotations=[diagonal_line],
+                color_by="colormap",
+                color_map="viridis"
+            )
+        else:
+            # Use class-based coloring with predefined color list
+            scatter = jscatter.Scatter(
+                data=plot_df,
+                x="x_data",
+                y="y_data",
+                x_label=x_label,
+                y_label=y_label,
+                width=500,
+                height=500,
+                aspect_ratio=1.0,
+                axes=True,
+                axes_grid=True,
+                annotations=[diagonal_line],
+                color_by="class",
+                color_map=class_color_list
+            )
 
         # Set identical axis ranges using the scale parameter
         shared_range = (axis_min, axis_max)
         scatter.x("x_data", scale=shared_range)
         scatter.y("y_data", scale=shared_range)
-
-        # Configure coloring
-        if colormap is not None and "colormap" in plot_df.columns:
-            # Use color mapping for density
-            scatter.color(by="colormap", map="viridis")
-        elif "color" in plot_df.columns:
-            # Use static class-based coloring with fixed color mapping
-            # Create a fixed categorical mapping for all possible classes
-            scatter.color(by="class", map=class_color_map)
-        else:
-            # Fallback to density-based opacity for better visualization of overlapping points
-            scatter.opacity(by="density")
 
         # Workaround for jupyter-scatter Button widget bug
         # Add missing _dblclick_handler attribute to prevent AttributeError
@@ -367,15 +438,7 @@ def scatterplot(
             selected_data = pl.DataFrame()
             print("No points selected")
 
-    # Connect selection callback for jupyter-scatter
-    if hasattr(scatter, "widget") and hasattr(scatter.widget, "selection"):
-        # Based on jupyter-scatter documentation, use scatter.widget.selection
-        scatter.widget.observe(on_selection_change, names=["selection"])
-    elif hasattr(scatter, "selection"):
-        scatter.observe(on_selection_change, names=["selection"])
-    else:
-        # Fallback: check if scatter itself has the selection trait
-        print("Could not find selection trait - selection updates may not work")
+    scatter.widget.observe(on_selection_change, names=["selection"])
 
     # Create class filter dropdown
     class_dropdown = widgets.Dropdown(
@@ -392,7 +455,6 @@ def scatterplot(
         selected_class = change["new"]
         print(f"Filtering by class: {selected_class}")
 
-
         # Create new plot with filtered data
         plot_result = create_plot(selected_class)
         if plot_result is None:
@@ -400,75 +462,96 @@ def scatterplot(
 
         new_plot_df, new_axis_min, new_axis_max = plot_result
 
-        # Create new scatter plot
+        # Update existing scatter plot in-place instead of recreating widget
         try:
-            # new_plot_df already has all the data and colors prepared
+            # Use scatter.data() now that we're using list-based color mapping
+            # Disable animation and keep existing scales
+            scatter.data(new_plot_df, reset_scales=False, animate=False)
 
-            # Create new scatter plot
-            new_scatter = jscatter.Scatter(
-                data=new_plot_df,
-                x="x_data",
-                y="y_data",
-                x_label=x_label,
-                y_label=y_label,
-                width=500,
-                height=500,
-                aspect_ratio=1.0,
-                axes=True,
-                axes_grid=True,
-            )
+            # Keep the original axis ranges static - don't recalculate based on filtered data
+            # This prevents zooming/panning animation between class changes
+            original_shared_range = (axis_min, axis_max)
+            scatter.x("x_data", scale=original_shared_range)
+            scatter.y("y_data", scale=original_shared_range)
 
-            # Set axis ranges
-            shared_range = (new_axis_min, new_axis_max)
-            new_scatter.x("x_data", scale=shared_range)
-            new_scatter.y("y_data", scale=shared_range)
+            print(f"Updated plot in-place for class: {selected_class}")
 
-            # Configure coloring
-            if colormap is not None and "colormap" in new_plot_df.columns:
-                # Use color mapping for density
-                new_scatter.color(by="colormap", map="viridis")
-            elif "color" in new_plot_df.columns:
-                # Use static class-based coloring with fixed color mapping
-                # Create a fixed categorical mapping for all possible classes
-                new_scatter.color(by="class", map=class_color_map)
-            else:
-                # Fallback to density-based opacity
-                new_scatter.opacity(by="density")
+        except Exception as e:
+            raise
+            print(f"Error updating plot in-place: {e}")
+            print("Falling back to widget recreation...")
 
-            # Connect selection callback
+            # Fallback to original method if in-place update fails
             try:
+                # Create diagonal line annotation extending far beyond data range
+                new_data_range = new_axis_max - new_axis_min
+                new_line_extend = new_data_range * 50  # Extend 50x beyond each side
+                new_line_min = new_axis_min - new_line_extend
+                new_line_max = new_axis_max + new_line_extend
+                # Style to match typical grid lines: light gray, thin
+                new_diagonal_line = jscatter.Line(
+                    [(new_line_min, new_line_min), (new_line_max, new_line_max)],
+                    line_color="#e0e0e0",
+                    line_width=1,
+                )
+
+                # Create new scatter plot
+                new_scatter = jscatter.Scatter(
+                    data=new_plot_df,
+                    x="x_data",
+                    y="y_data",
+                    x_label=x_label,
+                    y_label=y_label,
+                    width=500,
+                    height=500,
+                    aspect_ratio=1.0,
+                    axes=True,
+                    axes_grid=True,
+                    annotations=[new_diagonal_line],
+                )
+
+                # Set axis ranges
+                shared_range = (new_axis_min, new_axis_max)
+                new_scatter.x("x_data", scale=shared_range)
+                new_scatter.y("y_data", scale=shared_range)
+
+                # Configure coloring
+                if colormap is not None and "colormap" in new_plot_df.columns:
+                    new_scatter.color(by="colormap", map="viridis")
+                else:
+                    new_scatter.color(by="class", map=class_color_list)
+
+                # Connect selection callback
                 if hasattr(new_scatter, "widget") and hasattr(
                     new_scatter.widget, "selection"
                 ):
                     new_scatter.widget.observe(on_selection_change, names=["selection"])
-                elif hasattr(new_scatter, "selection"):
-                    new_scatter.observe(on_selection_change, names=["selection"])
-            except Exception as e:
-                print(f"Warning: Could not connect selection callback: {e}")
 
-            # Update the plot widget in the container
-            new_plot_widget = new_scatter.show()
+                # Replace widget
+                new_plot_widget = new_scatter.show()
+                container_children = list(container.children)
 
-            # Update container children
-            container_children = list(container.children)
-            # Find and replace the plot widget (it should be the last one)
-            for i in range(len(container_children) - 1, -1, -1):
-                if (
-                    hasattr(container_children[i], "children")
-                    or str(type(container_children[i])).find("jscatter") >= 0
-                ):
-                    container_children[i] = new_plot_widget
-                    break
+                for i in range(len(container_children) - 1, -1, -1):
+                    if hasattr(container_children[i], "children"):
+                        plot_legend_children = list(container_children[i].children)
+                        if len(plot_legend_children) > 0:
+                            container_children[i].children = [
+                                new_plot_widget
+                            ] + plot_legend_children[1:]
+                        break
+                    elif str(type(container_children[i])).find("jscatter") >= 0:
+                        container_children[i] = new_plot_widget
+                        break
 
-            container.children = container_children
+                container.children = container_children
 
-            # Update references
-            current_scatter = new_scatter
-            current_plot_widget = new_plot_widget
-            scatter = new_scatter
+                # Update references
+                scatter = new_scatter
+                current_scatter = new_scatter
+                current_plot_widget = new_plot_widget
 
-        except Exception as e:
-            print(f"Error updating plot: {e}")
+            except Exception as fallback_error:
+                print(f"Fallback also failed: {fallback_error}")
 
     # Connect dropdown callback
     class_dropdown.observe(update_plot, names="value")
@@ -477,18 +560,30 @@ def scatterplot(
     plot_widget = scatter.show()
     current_plot_widget = plot_widget
 
-    # Create filter controls
+    # Create legend for class colors (only when using class-based coloring)
+    legend_widget = None
+    if colormap is None:  # Only show legend for class-based coloring
+        legend_widget = create_class_legend(unique_classes, class_color_map)
+
+    # Create filter controls (just dropdown, legend will be separate)
     filter_controls = HBox([class_dropdown])
+
+    # Create plot area with legend positioned to the right
+    if legend_widget:
+        # Create a container with plot on left and legend on right
+        plot_with_legend = HBox([plot_widget, legend_widget])
+    else:
+        plot_with_legend = plot_widget
 
     if title:
         # Create container widget with title
         title_widget = widgets.HTML(f"<h3>{title}</h3>")
-        container = VBox([title_widget, filter_controls, plot_widget])
+        container = VBox([title_widget, filter_controls, plot_with_legend])
     elif x_label and y_label and not title:
-        title_widget = widgets.HTML(f"<h3>{y_label} vs. {x_label}</h3>")
-        container = VBox([title_widget, filter_controls, plot_widget])
+        title_widget = widgets.HTML(f"<h3>{y_label}</h3> vs. <h3>{x_label}</h3>")
+        container = VBox([title_widget, filter_controls, plot_with_legend])
     else:
-        container = VBox([filter_controls, plot_widget])
+        container = VBox([filter_controls, plot_with_legend])
 
     # Make the main container responsive
     if hasattr(container, "layout"):
