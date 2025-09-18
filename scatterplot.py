@@ -2,14 +2,14 @@ from typing import Any, Callable, NamedTuple
 
 import ipywidgets as widgets
 import jscatter
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import polars as pl
 from IPython.display import display
 from ipywidgets import HBox, VBox
-from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
 from matplotlib.colors import LinearSegmentedColormap
-import matplotlib.pyplot as plt
+from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
 
 
 class ScatterplotResult(NamedTuple):
@@ -377,7 +377,9 @@ def scatterplot(
         if selected_class == "All":
             current_plot_data = full_merged_data
         else:
-            current_plot_data = full_merged_data.filter(pl.col(category_column) == selected_class)
+            current_plot_data = full_merged_data.filter(
+                pl.col(category_column) == selected_class
+            )
 
         return plot_df, axis_min, axis_max
 
@@ -500,7 +502,12 @@ def scatterplot(
 
     def update_plot(change):
         """Update the plot when class filter changes"""
-        nonlocal current_scatter, current_plot_widget, merged_data, scatter, current_plot_data
+        nonlocal \
+            current_scatter, \
+            current_plot_widget, \
+            merged_data, \
+            scatter, \
+            current_plot_data
 
         selected_class = change["new"]
         print(f"Filtering by class: {selected_class}")
