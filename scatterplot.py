@@ -8,6 +8,8 @@ import polars as pl
 from IPython.display import display
 from ipywidgets import HBox, VBox
 from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.pyplot as plt
 
 
 class ScatterplotResult(NamedTuple):
@@ -99,6 +101,7 @@ def scatterplot(
     y: pl.DataFrame,
     metadata: pl.DataFrame,
     join_column: str,
+    category_column: str = "class",
     x_label: str | None = None,
     y_label: str | None = None,
     title: str | None = None,
@@ -118,9 +121,11 @@ def scatterplot(
     y : pl.DataFrame
         Dataset for X-axis values
     metadata : pl.DataFrame
-        Metadata describing the cCREs with columns: rDHS, cCRE, chr, start, end, class
+        Metadata describing the cCREs with columns including the category column
     join_column : str
         Column name to join the datasets on
+    category_column : str, default "class"
+        Column name in metadata to use for categorical coloring and filtering
     x_label : str, optional
         Custom label for X-axis
     y_label : str, optional
@@ -157,7 +162,10 @@ def scatterplot(
         raise ValueError(f"Column '{join_column}' not found in metadata")
 
     # Validate metadata columns
-    required_metadata_cols = ["rDHS", "cCRE", "chr", "start", "end", "class"]
+    required_metadata_cols = ["rDHS", "cCRE", "chr", "start", "end"]
+    if category_column not in required_metadata_cols:
+        required_metadata_cols.append(category_column)
+
     missing_cols = [
         col for col in required_metadata_cols if col not in metadata.columns
     ]
@@ -175,28 +183,49 @@ def scatterplot(
         raise ValueError("No matching records found between datasets")
 
     # Get unique classes for dropdown
-    unique_classes = sorted(full_merged_data["class"].unique().to_list())
+    unique_classes = sorted(full_merged_data[category_column].unique().to_list())
     available_classes = ["All"] + unique_classes
 
-    # Create static color mapping for all classes using custom color palette
-    color_palette = [
-        "#8f2be7",  # Purple
-        "#fb4fd9",  # Pink
-        "#e9162d",  # Red
-        "#f28200",  # Orange
-        "#ffdb28",  # Yellow
-        "#1fb819",  # Green
-        "#00e1da",  # Cyan
-        "#007bd8",  # Blue
-    ]
+    # Create interpolated colormap based on number of unique categories
+    def create_interpolated_colormap(n_categories: int) -> tuple[list[str], dict[str, str]]:
+        """Create an interpolated colormap with exactly n_categories colors."""
+        # Base color palette for interpolation
+        base_colors = [
+            "#8f2be7",  # Purple
+            "#fb4fd9",  # Pink
+            "#e9162d",  # Red
+            "#f28200",  # Orange
+            "#ffdb28",  # Yellow
+            "#1fb819",  # Green
+            "#00e1da",  # Cyan
+            "#007bd8",  # Blue
+        ]
 
-    # Create mapping of class to color - use list for jscatter compatibility
-    class_color_list = []
-    class_color_map = {}  # Keep dict for legend creation
+        if n_categories <= len(base_colors):
+            # Use base colors directly if we have enough
+            selected_colors = base_colors[:n_categories]
+        else:
+            # Create a custom colormap and interpolate
+            # Create colormap from base colors
+            cmap = LinearSegmentedColormap.from_list(
+                "custom", base_colors, N=n_categories
+            )
+            # Sample colors evenly across the colormap
+            selected_colors = [
+                plt.colors.rgb2hex(cmap(i / (n_categories - 1) if n_categories > 1 else 0))
+                for i in range(n_categories)
+            ]
+
+        return selected_colors
+
+    # Generate colors for exact number of categories
+    n_categories = len(unique_classes)
+    class_color_list = create_interpolated_colormap(n_categories)
+
+    # Create mapping of class to color for legend
+    class_color_map = {}
     for i, cls in enumerate(unique_classes):
-        color = color_palette[i % len(color_palette)]
-        class_color_list.append(color)
-        class_color_map[cls] = color  # Keep for legend
+        class_color_map[cls] = class_color_list[i]
 
     # Validate default_class
     if default_class not in available_classes:
@@ -212,7 +241,7 @@ def scatterplot(
     if default_class == "All":
         merged_data = full_merged_data
     else:
-        merged_data = full_merged_data.filter(pl.col("class") == default_class)
+        merged_data = full_merged_data.filter(pl.col(category_column) == default_class)
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
@@ -266,16 +295,16 @@ def scatterplot(
     # Extract all coordinates for the complete dataset
     all_x_coords = full_merged_clean[x_col].to_numpy().ravel()
     all_y_coords = full_merged_clean[y_col].to_numpy().ravel()
-    all_class_data = full_merged_clean["class"].to_numpy()
+    all_class_data = full_merged_clean[category_column].to_numpy()
 
     # Create complete plot DataFrame with properly formatted categorical data
     complete_plot_df = pd.DataFrame(
-        {"x_data": all_x_coords, "y_data": all_y_coords, "class": all_class_data}
+        {"x_data": all_x_coords, "y_data": all_y_coords, category_column: all_class_data}
     )
 
     # Ensure categorical column has consistent categories for all possible classes
-    complete_plot_df["class"] = pd.Categorical(
-        complete_plot_df["class"],
+    complete_plot_df[category_column] = pd.Categorical(
+        complete_plot_df[category_column],
         categories=unique_classes,
         ordered=True
     )
@@ -306,7 +335,7 @@ def scatterplot(
         if selected_class == "All":
             plot_df = complete_plot_df
         else:
-            plot_df = complete_plot_df[complete_plot_df["class"] == selected_class]
+            plot_df = complete_plot_df[complete_plot_df[category_column] == selected_class]
 
         if len(plot_df) == 0:
             print(f"No valid data points for class: {selected_class}")
@@ -391,7 +420,7 @@ def scatterplot(
                 axes=True,
                 axes_grid=True,
                 annotations=[diagonal_line],
-                color_by="class",
+                color_by=category_column,
                 color_map=class_color_list
             )
 
@@ -519,7 +548,7 @@ def scatterplot(
                 if colormap is not None and "colormap" in new_plot_df.columns:
                     new_scatter.color(by="colormap", map="viridis")
                 else:
-                    new_scatter.color(by="class", map=class_color_list)
+                    new_scatter.color(by=category_column, map=class_color_list)
 
                 # Connect selection callback
                 if hasattr(new_scatter, "widget") and hasattr(
