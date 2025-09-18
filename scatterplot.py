@@ -330,6 +330,7 @@ def scatterplot(
 
     # Create selection tracking for selected points
     selected_data = pl.DataFrame()  # Will hold selected points data
+    current_plot_data = merged_data  # Track the currently displayed data for selection
 
     # Storage for current plot components
     current_scatter = None
@@ -337,7 +338,7 @@ def scatterplot(
 
     def create_plot(selected_class="All"):
         """Create a scatter plot for the selected class by filtering complete_plot_df"""
-        nonlocal current_scatter, current_plot_widget, selected_data
+        nonlocal current_scatter, current_plot_widget, selected_data, current_plot_data
 
         # Filter the complete plot DataFrame based on selected class (no copy needed)
         if selected_class == "All":
@@ -371,6 +372,12 @@ def scatterplot(
             f"Data ranges: x=[{x_min:.2f}, {x_max:.2f}], y=[{y_min:.2f}, {y_max:.2f}]"
         )
         print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
+
+        # Update the current plot data for selection tracking
+        if selected_class == "All":
+            current_plot_data = full_merged_data
+        else:
+            current_plot_data = full_merged_data.filter(pl.col(category_column) == selected_class)
 
         return plot_df, axis_min, axis_max
 
@@ -473,8 +480,8 @@ def scatterplot(
             # Convert to list if it's a numpy array
             if hasattr(selected_indices, "tolist"):
                 selected_indices = selected_indices.tolist()
-            # Update selected_data with the selected points
-            selected_data = merged_data[selected_indices]
+            # Update selected_data with the selected points from currently displayed data
+            selected_data = current_plot_data[selected_indices]
             print(f"Selected {len(selected_indices)} points")
         else:
             # No selection - empty DataFrame
@@ -493,10 +500,14 @@ def scatterplot(
 
     def update_plot(change):
         """Update the plot when class filter changes"""
-        nonlocal current_scatter, current_plot_widget, merged_data, scatter
+        nonlocal current_scatter, current_plot_widget, merged_data, scatter, current_plot_data
 
         selected_class = change["new"]
         print(f"Filtering by class: {selected_class}")
+
+        # Clear any existing selection when changing classes
+        nonlocal selected_data
+        selected_data = pl.DataFrame()
 
         # Create new plot with filtered data
         plot_result = create_plot(selected_class)
