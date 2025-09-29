@@ -30,6 +30,7 @@ dependencies = [
     "scikit-learn>=1.3.2",
     "pyarrow>=17.0.0",
     "polars>=1.8.2",
+    "ipydatagrid>=1.3.2",
 ]
 
 [tool.black]
