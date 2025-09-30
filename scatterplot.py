@@ -2,7 +2,6 @@ from typing import Any, Callable, NamedTuple
 
 import ipywidgets as widgets
 import jscatter
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -13,17 +12,25 @@ import matplotlib.colors as mcolors
 from sklearn.neighbors import KDTree, KernelDensity, NearestNeighbors
 from ipydatagrid import DataGrid
 
+SCALE = (-10, 10)
+
 
 class ScatterplotResult(NamedTuple):
     """Named tuple for scatterplot function return value."""
 
     scatter: Any
-    merged_data: pl.DataFrame
+    plot_data: pd.DataFrame
     container: Any
     selection: Callable[[], pl.DataFrame]
-    class_dropdown: Any
+    category_dropdown: Any
     metadata_table: Any
     datagrid: Any
+
+
+class SelectionState:
+    def __init__(self, plot_data):
+        self.selected_ids = set()
+        self.plot_data = plot_data
 
 
 def kde(bandwidth=1.0):
@@ -58,16 +65,16 @@ def radius(radius=1.0):
     return calculate_radius_density
 
 
-def create_class_legend(unique_classes, class_color_map):
+def _create_category_legend(unique_categories, category_color_map):
     """
-    Create a legend widget showing class colors.
+    Create a legend widget showing category colors.
 
     Parameters:
     -----------
-    unique_classes : list
-        List of unique class names
-    class_color_map : dict
-        Mapping of class names to colors
+    unique_categories : list
+        List of unique category names
+    category_color_map : dict
+        Mapping of category names to colors
 
     Returns:
     --------
@@ -75,8 +82,8 @@ def create_class_legend(unique_classes, class_color_map):
         Legend widget
     """
     legend_items = []
-    for cls in unique_classes:
-        color = class_color_map[cls]
+    for cls in unique_categories:
+        color = category_color_map[cls]
         legend_items.append(
             widgets.HTML(
                 f'<div style="display: flex; align-items: center; margin: 2px 0;">'
@@ -123,7 +130,7 @@ def _handle_selection_change(
         if metadata_table_widget:
             metadata_table_widget.grid_style = warning_style
         apply_button.disabled = True
-        status_message.value = f"<span style='color: #dc3545;'>Too many rows selected ({total_rows_selected}). Select exactly 2 rows.</span>"
+        status_message.value = f"<span style='color: #dc3545; font-style: italic;'> Too many rows selected ({total_rows_selected}) - select exactly 2 rows</span>"
     elif total_rows_selected == 2:
         # Exactly 2 rows - use success colors
         success_style = {
@@ -134,7 +141,7 @@ def _handle_selection_change(
             metadata_table_widget.grid_style = success_style
         apply_button.disabled = False
         status_message.value = (
-            "<span style='color: #28a745;'>✓ Ready to apply selection</span>"
+            "<span style='color: #28a745; font-style: italic;'> ✓ Ready to apply selection</span>"
         )
     else:
         # Less than 2 rows - use default styling
@@ -146,36 +153,33 @@ def _handle_selection_change(
             metadata_table_widget.grid_style = default_style
         apply_button.disabled = True
         if total_rows_selected == 0:
-            status_message.value = "<span style='color: #666; font-style: italic;'>Select exactly 2 rows to enable</span>"
+            status_message.value = "<span style='color: #666; font-style: italic;'> Select 2 rows</span>"
         else:
-            status_message.value = f"<span style='color: #ffc107;'>Need more rows selected ({total_rows_selected}/2)</span>"
+            status_message.value = "<span style='color: #007bff; font-style: italic;'> Select one more row</span>"
 
 
 def _create_plot_data(
-    full_merged_data,
-    x_col,
-    y_col,
+    all_data,
+    x_column,
+    y_column,
     category_column,
-    unique_classes,
+    unique_categories,
     join_column,
-    selected_class="All",
+    selected_category="All",
 ):
-    """Create plot data for the selected class, returning pandas DataFrame and current plot data for selection."""
-    # Apply class filtering on the Polars DataFrame
-    if selected_class == "All":
-        filtered_data = full_merged_data
+    """Create plot data for the selected category, returning pandas DataFrame and current plot data for selection."""
+    if selected_category == "All":
+        filtered_data = all_data
     else:
-        filtered_data = full_merged_data.filter(
-            pl.col(category_column) == selected_class
-        )
+        filtered_data = all_data.filter(pl.col(category_column) == selected_category)
 
     if len(filtered_data) == 0:
-        print(f"No valid data points for class: {selected_class}")
+        print(f"No valid data points for category: {selected_category}")
         return None, None, None, None
 
     # Extract coordinates for axis calculations
-    x_coords = filtered_data[x_col].to_numpy().ravel()
-    y_coords = filtered_data[y_col].to_numpy().ravel()
+    x_coords = filtered_data[x_column].to_numpy().ravel()
+    y_coords = filtered_data[y_column].to_numpy().ravel()
 
     x_min, x_max = x_coords.min(), x_coords.max()
     y_min, y_max = y_coords.min(), y_coords.max()
@@ -193,50 +197,35 @@ def _create_plot_data(
     print(f"Shared axis range: [{axis_min:.2f}, {axis_max:.2f}]")
 
     # Convert to pandas DataFrame for jscatter
-    class_data = filtered_data[category_column].to_numpy()
+    category_data = filtered_data[category_column].to_numpy()
     join_data = filtered_data[join_column].to_numpy()
     plot_df = pd.DataFrame(
         {
             "x_data": x_coords,
             "y_data": y_coords,
-            category_column: class_data,
+            category_column: pd.Categorical(
+                category_data, categories=unique_categories, ordered=True
+            ),
             join_column: join_data,
         }
-    )
+    ).set_index(join_column)
 
-    # Ensure categorical column has consistent categories
-    plot_df[category_column] = pd.Categorical(
-        plot_df[category_column], categories=unique_classes, ordered=True
-    )
-
-    # Add colormap if it exists in the polars data
-    if "colormap" in filtered_data.columns:
-        colormap_values = filtered_data["colormap"].to_numpy()
-        plot_df["colormap"] = colormap_values
-
-    # Reset index to ensure proper correspondence with jscatter selection
-    plot_df.reset_index(drop=True, inplace=True)
-
-    # Convert plot_df back to polars for consistency with selection handling
-    plot_data_for_selection = pl.from_pandas(plot_df)
-
-    return plot_df, axis_min, axis_max, plot_data_for_selection
+    return plot_df, axis_min, axis_max
 
 
 def _handle_apply_click(
     metadata_table_widget,
     sample_metadata_df,
     available_columns,
-    complete_data_scan,
+    all_data_scan,
     join_column,
     metadata,
-    category_column,
     debug_output,
 ):
     """Handle apply button click to update plot with selected samples"""
     with debug_output:
         print("=" * 50)
-        print("🔥 BUTTON CLICKED! 🔥")
+        print("🔥 Apply button clicked")
 
         # Get selected rows
         if not metadata_table_widget or not hasattr(
@@ -262,87 +251,60 @@ def _handle_apply_click(
                 if "biosample" in sample_metadata_pandas.columns:
                     biosample_value = sample_metadata_pandas.iloc[row_idx]["biosample"]
                 else:
-                    # Try the first column if biosample doesn't exist
-                    first_col = sample_metadata_pandas.columns[0]
-                    biosample_value = sample_metadata_pandas.iloc[row_idx][first_col]
-                    print(
-                        f"⚠️  'biosample' column not found, using '{first_col}' instead"
-                    )
+                    print("❌ 'biosample' column not found")
+                    return None
 
                 selected_biosamples.append(biosample_value)
                 print(f"✅ Row {row_idx}: {biosample_value}")
 
         print(f"🎯 Selected biosamples: {selected_biosamples}")
 
-        # Create new x and y dataframes with only selected biosample columns
-        if len(selected_biosamples) == 2:
-            biosample1, biosample2 = selected_biosamples[0], selected_biosamples[1]
-
-            # Create new x and y dataframes from the complete data file using lazy loading
-            if biosample1 in available_columns:
-                new_x = complete_data_scan.select([join_column, biosample1]).collect()
-                print(f"✅ Created new x dataframe with columns: {new_x.columns}")
-            else:
-                print(f"❌ ERROR: {biosample1} not found in complete data columns")
-                print(f"Available columns: {available_columns}")
-                return None
-
-            if biosample2 in available_columns:
-                new_y = complete_data_scan.select([join_column, biosample2]).collect()
-                print(f"✅ Created new y dataframe with columns: {new_y.columns}")
-            else:
-                print(f"❌ ERROR: {biosample2} not found in complete data columns")
-                print(f"Available columns: {available_columns}")
-                return None
-
-            # Merge the new datasets with metadata
-            print("🔗 Merging new datasets...")
-            merged_xy = new_x.join(new_y, on=join_column, how="inner", suffix="_y")
-            new_full_merged_data = merged_xy.join(metadata, on=join_column, how="inner")
-
-            if len(new_full_merged_data) == 0:
-                print("❌ ERROR: No matching records found between new datasets")
-                return None
-
-            # Find the correct column names after join
-            if biosample1 in new_full_merged_data.columns:
-                actual_x_col = biosample1
-            elif biosample1 + "_y" in new_full_merged_data.columns:
-                actual_x_col = biosample1 + "_y"
-            else:
-                print(f"❌ ERROR: Cannot find column for {biosample1}")
-                return None
-
-            if biosample2 in new_full_merged_data.columns:
-                actual_y_col = biosample2
-            elif biosample2 + "_y" in new_full_merged_data.columns:
-                actual_y_col = biosample2 + "_y"
-            else:
-                print(f"❌ ERROR: Cannot find column for {biosample2}")
-                return None
-
-            print(f"📈 Using columns: X={actual_x_col}, Y={actual_y_col}")
-
-            # Filter out NaN values
-            print("🧹 Filtering NaN values...")
-            new_merged_clean = new_full_merged_data.filter(
-                (~pl.col(actual_x_col).is_nan()) & (~pl.col(actual_y_col).is_nan())
-            )
-            print(f"   Clean data: {len(new_merged_clean)} rows")
-
-            # Return the new data to replace the global state
-            return {
-                "full_merged_data": new_merged_clean,
-                "x_col": actual_x_col,
-                "y_col": actual_y_col,
-                "x_label": biosample1,
-                "y_label": biosample2,
-            }
-        else:
+        biosample1, biosample2, *extra = selected_biosamples
+        if extra:
             print(
                 f"❌ ERROR: Expected exactly 2 biosamples, got {len(selected_biosamples)}"
             )
             return None
+
+        if biosample1 not in available_columns:
+            print(f"❌ ERROR: {biosample1} not found in complete data columns")
+            print(f"Available columns: {available_columns}")
+            return None
+
+        if biosample2 not in available_columns:
+            print(f"❌ ERROR: {biosample2} not found in complete data columns")
+            print(f"Available columns: {available_columns}")
+            return None
+
+        # Merge the new datasets with metadata
+        print("🔗 Merging new datasets...")
+        new_all_data = (
+            all_data_scan.select([join_column, biosample1, biosample2])
+            .collect()
+            .join(metadata, on=join_column, how="inner")
+        )
+
+        if len(new_all_data) == 0:
+            print("❌ ERROR: No matching records found between new datasets")
+            return None
+
+        print(f"📈 Using columns: X={biosample1}, Y={biosample2}")
+
+        # Filter out NaN values
+        print("🧹 Filtering NaN values...")
+        new_all_data = new_all_data.filter(
+            (~pl.col(biosample1).is_nan()) & (~pl.col(biosample2).is_nan())
+        )
+        print(f"   Clean data: {len(new_all_data)} rows")
+
+        # Return the new data to replace the global state
+        return {
+            "all_data": new_all_data,
+            "x_column": biosample1,
+            "y_column": biosample2,
+            "x_label": biosample1,
+            "y_label": biosample2,
+        }
 
 
 def _initialize_metadata_table(
@@ -352,7 +314,7 @@ def _initialize_metadata_table(
 
     Returns:
         Tuple of (sample_metadata_df, metadata_table_widget, datagrid, apply_button,
-                 status_message, debug_output, complete_data_scan, available_columns,
+                 status_message, debug_output, all_data_scan, available_columns,
                  selection_handler, apply_handler)
     """
     sample_metadata_df = None
@@ -361,7 +323,7 @@ def _initialize_metadata_table(
     apply_button = None
     status_message = None
     debug_output = None
-    complete_data_scan = None
+    all_data_scan = None
     available_columns = []
     selection_handler = None
     apply_handler = None
@@ -377,7 +339,7 @@ def _initialize_metadata_table(
 
             # Get column names from the data file without loading into memory
             data_scan = pl.scan_parquet(data_file)
-            available_columns = data_scan.columns
+            available_columns = data_scan.collect_schema().names()
 
             if join_column not in available_columns:
                 raise ValueError(f"Column '{join_column}' not found in data file")
@@ -385,7 +347,7 @@ def _initialize_metadata_table(
             print(f"Data file has {len(available_columns)} columns available")
 
             # Store the lazy frame for later use - we'll only load specific columns when needed
-            complete_data_scan = data_scan
+            all_data_scan = data_scan
 
             # Create ipydatagrid widget for the metadata
             sample_metadata_pandas = sample_metadata_df.to_pandas()
@@ -402,7 +364,7 @@ def _initialize_metadata_table(
                 description="Apply Selection", button_style="primary", disabled=True
             )
             status_message = widgets.HTML(
-                value="<span style='color: #666; font-style: italic;'>Select exactly 2 rows to enable</span>"
+                value="<span style='color: #666; font-style: italic;'> Select 2 rows</span>"
             )
 
             # Create output widget to capture debug messages from button clicks
@@ -426,21 +388,20 @@ def _initialize_metadata_table(
             selection_handler = limit_selection
 
             # Create apply handler using partial application
-            def on_apply_click_wrapper(
+            def on_click_wrapper(
                 metadata,
                 category_column,
                 colormap,
                 update_globals_callback,
             ):
-                def on_apply_click(b):
+                def on_click(b):
                     result = _handle_apply_click(
                         metadata_table_widget,
                         sample_metadata_df,
                         available_columns,
-                        complete_data_scan,
+                        all_data_scan,
                         join_column,
                         metadata,
-                        category_column,
                         debug_output,
                     )
                     if result is not None and update_globals_callback is not None:
@@ -448,36 +409,30 @@ def _initialize_metadata_table(
                             print("🔄 Updating plot with new biosamples...")
 
                             # Extract the new data
-                            new_full_merged_data = result["full_merged_data"]
-                            x_col = result["x_col"]
-                            y_col = result["y_col"]
+                            new_all_data = result["all_data"]
+                            x_column = result["x_column"]
+                            y_column = result["y_column"]
                             x_label = result["x_label"]
                             y_label = result["y_label"]
 
                             # Add colormap to the new polars data if needed
                             if colormap is not None:
-                                x_coords = (
-                                    new_full_merged_data[x_col].to_numpy().ravel()
-                                )
-                                y_coords = (
-                                    new_full_merged_data[y_col].to_numpy().ravel()
-                                )
+                                x_coords = new_all_data[x_column].to_numpy().ravel()
+                                y_coords = new_all_data[y_column].to_numpy().ravel()
                                 points = np.column_stack([x_coords, y_coords])
                                 colormap_values = colormap(points)
-                                new_full_merged_data = (
-                                    new_full_merged_data.with_columns(
-                                        pl.lit(colormap_values).alias("colormap")
-                                    )
+                                new_all_data = new_all_data.with_columns(
+                                    pl.lit(colormap_values).alias("colormap")
                                 )
 
                             # Update all global variables - this will trigger plot refresh
                             update_globals_callback(
-                                new_full_merged_data, x_col, y_col, x_label, y_label
+                                new_all_data, x_column, y_column, x_label, y_label
                             )
 
-                return on_apply_click
+                return on_click
 
-            apply_handler = on_apply_click_wrapper
+            apply_handler = on_click_wrapper
 
             print("Added selection callback")
             metadata_table_widget.observe(selection_handler, names="selections")
@@ -494,11 +449,84 @@ def _initialize_metadata_table(
         apply_button,
         status_message,
         debug_output,
-        complete_data_scan,
+        all_data_scan,
         available_columns,
         selection_handler,
         apply_handler,
     )
+
+
+def create_plot(
+    plot_data,
+    category_column,
+    category_color_list,
+):
+    diagonal_line = jscatter.Line(
+        [(-500, -500), (500, 500)],  # type: ignore
+        line_color="#e0e0e0",
+        line_width=1,
+    )
+    scatter = jscatter.Scatter(
+        data=plot_data,
+        x="x_data",
+        y="y_data",
+        width=500,
+        height=500,
+        aspect_ratio=1.0,
+        axes=True,
+        axes_grid=True,
+        annotations=[diagonal_line],
+        color_by=category_column,
+        color_map=category_color_list,
+        use_index=True,
+    )
+    scatter.x("x_data", scale=SCALE)
+    scatter.y("y_data", scale=SCALE)
+    return scatter
+
+
+def init_plot(
+    scatter,
+    all_data,
+    x_column,
+    y_column,
+    x_label,
+    y_label,
+    category_column,
+    unique_categories,
+    selected_category,
+    join_column,
+    category_color_list,
+):
+    """Update the plot when category filter changes"""
+
+    print(f"Filtering by category: {selected_category}")
+
+    # Create new plot with filtered data
+    plot_result = _create_plot_data(
+        all_data,
+        x_column,
+        y_column,
+        category_column,
+        unique_categories,
+        join_column,
+        selected_category,
+    )
+
+    if plot_result[0] is None:
+        return
+
+    new_plot_df, _, _ = plot_result
+
+    if not scatter:
+        scatter = create_plot(new_plot_df, category_column, category_color_list)
+    else:
+        scatter.data(new_plot_df, reset_scales=False, animate=False, use_index=True)
+    scatter.axes(axes=True, grid=True, labels=[x_label, y_label])
+
+    print(f"Updated plot in-place for category: {selected_category}")
+
+    return scatter
 
 
 def scatterplot(
@@ -506,7 +534,7 @@ def scatterplot(
     y: pl.DataFrame,
     metadata: pl.DataFrame,
     join_column: str,
-    category_column: str = "class",
+    category_column: str = "category",
     x_label: str | None = None,
     y_label: str | None = None,
     title: str | None = None,
@@ -515,6 +543,7 @@ def scatterplot(
     sample_metadata_file: str | None = None,
     sample_id_column: str | None = None,
     data_file: str | None = None,
+    debug: bool = False,
 ) -> ScatterplotResult:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
@@ -532,7 +561,7 @@ def scatterplot(
         Metadata describing the cCREs with columns including the category column
     join_column : str
         Column name to join the datasets on
-    category_column : str, default "class"
+    category_column : str, default "category"
         Column name in metadata to use for categorical coloring and filtering
     x_label : str, optional
         Custom label for X-axis
@@ -545,10 +574,10 @@ def scatterplot(
         - kde(bandwidth=1): Kernel density estimation
         - knn(k=100): K-nearest neighbors density
         - radius(radius=1): Points within radius density
-        - None: Use class-based coloring (default)
+        - None: Use category-based coloring (default)
     default_category : str, default "All"
-        Default class to filter by on initial display. Use "All" to show all classes.
-        A dropdown will allow changing the class filter.
+        Default category to filter by on initial display. Use "All" to show all categories.
+        A dropdown will allow changing the category filter.
     sample_metadata_file : str, optional
         Path to parquet file containing sample metadata to display as interactive table
     sample_id_column : str, optional
@@ -556,16 +585,18 @@ def scatterplot(
     data_file : str, optional
         Path to parquet file containing complete dataset with all biosample columns
         If not provided, metadata table and biosample selection will be disabled
+    debug : bool, default False
+        Whether to show the debug output window below the metadata table
 
     Returns:
     --------
     ScatterplotResult
         Named tuple containing:
         - scatter: The jscatter plot object
-        - merged_data: The merged dataset used for plotting
+        - plot_data: The merged dataset used for plotting
         - container: The plot container widget
         - selection: Function that returns DataFrame of currently selected points
-        - class_dropdown: The class filter dropdown widget
+        - category_dropdown: The category filter dropdown widget
         - metadata_table: ITables widget for sample metadata (None if not provided)
     """
 
@@ -596,7 +627,7 @@ def scatterplot(
         apply_button,
         status_message,
         debug_output,
-        complete_data_scan,
+        all_data_scan,
         available_columns,
         selection_handler,
         apply_handler,
@@ -604,19 +635,15 @@ def scatterplot(
         sample_metadata_file, sample_id_column, data_file, join_column
     )
 
-    # Merge datasets
-    # First merge x and y
-    merged_xy = x.join(y, on=join_column, how="inner", suffix="_y")
-
-    # Then merge with metadata
-    full_merged_data = merged_xy.join(metadata, on=join_column, how="inner")
-
-    if len(full_merged_data) == 0:
+    all_data = x.join(y, on=join_column, how="inner", suffix="_y").join(
+        metadata, on=join_column, how="inner"
+    )
+    if len(all_data) == 0:
         raise ValueError("No matching records found between datasets")
 
-    # Get unique classes for dropdown
-    unique_classes = sorted(full_merged_data[category_column].unique().to_list())
-    available_classes = ["All"] + unique_classes
+    # Get unique categories for dropdown
+    unique_categories = sorted(all_data[category_column].unique().to_list())
+    available_categories = ["All"] + unique_categories
 
     # Create interpolated colormap based on number of unique categories
     def create_interpolated_colormap(
@@ -646,216 +673,94 @@ def scatterplot(
             )
             # Sample colors evenly across the colormap
             selected_colors = [
-                mcolors.rgb2hex(
-                    cmap(i / (n_categories - 1) if n_categories > 1 else 0)
-                )
+                mcolors.rgb2hex(cmap(i / (n_categories - 1) if n_categories > 1 else 0))
                 for i in range(n_categories)
             ]
 
         return selected_colors
 
     # Generate colors for exact number of categories
-    n_categories = len(unique_classes)
-    class_color_list = create_interpolated_colormap(n_categories)
+    category_color_list = create_interpolated_colormap(len(unique_categories))
 
-    # Create mapping of class to color for legend
-    class_color_map = dict(zip(unique_classes, class_color_list))
+    # Create mapping of category to color for legend
+    category_color_map = dict(zip(unique_categories, category_color_list))
 
     # Validate default_category
-    if default_category not in available_classes:
+    if default_category not in available_categories:
         print(
-            f"Warning: default_category '{default_category}' not found in data. Available classes: {available_classes}"
+            f"Warning: default_category '{default_category}' not found in data. Available categories: {available_categories}"
         )
-        if available_classes:
-            default_category = available_classes[0]
+        if available_categories:
+            default_category = available_categories[0]
         else:
-            raise ValueError("No class data available for filtering")
-
-    # Initially filter by default class
-    if default_category == "All":
-        merged_data = full_merged_data
-    else:
-        merged_data = full_merged_data.filter(
-            pl.col(category_column) == default_category
-        )
+            raise ValueError("No category data available for filtering")
 
     # Prepare data for plotting
     # Assume we want to plot the first numeric column from each dataset
     # (excluding the join column)
-    x_cols = [
-        col for col in x.columns if col != join_column and x[col].dtype.is_numeric()
+    x_column, *extra_x = [
+        c for c in x.columns if c != join_column and x[c].dtype.is_numeric()
     ]
-    y_cols = [
-        col for col in y.columns if col != join_column and y[col].dtype.is_numeric()
+    y_column, *extra_y = [
+        c for c in y.columns if c != join_column and y[c].dtype.is_numeric()
     ]
+    if extra_x:
+        raise ValueError("Expected a single data column for x")
+    if extra_y:
+        raise ValueError("Expected a single data column for y")
 
-    if not x_cols:
-        raise ValueError("No numeric columns found in x for plotting")
-    if not y_cols:
-        raise ValueError("No numeric columns found in y for plotting")
-
-    # Use the first numeric column from each dataset, with suffix handling
-    x_col = x_cols[0]
-    if x_col in merged_data.columns and x_col + "_y" in merged_data.columns:
-        x_col = x_col  # Use the original column from x
-    elif x_col + "_y" in merged_data.columns:
-        # Column was renamed during join, but we want the one from x (no suffix in Polars join)
-        pass
-
-    y_col = y_cols[0]
-    if y_col + "_y" in merged_data.columns:
-        y_col = y_col + "_y"
-
-    # Extract coordinates and ensure they are proper 1D arrays
-    x_coords = merged_data[x_col].to_numpy().ravel()
-    y_coords = merged_data[y_col].to_numpy().ravel()
-
-    # Ensure we have valid numeric data
-    if len(x_coords) == 0 or len(y_coords) == 0:
-        raise ValueError("No data points to plot")
-
-    # Remove any NaN values
-    valid_mask = ~(np.isnan(x_coords) | np.isnan(y_coords))
-    x_coords = x_coords[valid_mask]
-    y_coords = y_coords[valid_mask]
-    # Convert boolean mask to row indices for Polars filtering
-    valid_indices = np.where(valid_mask)[0]
-    merged_data = merged_data[valid_indices]
-
-    # Create complete plot DataFrame once for all cCREs with their colors
-    # Filter out NaN values from the complete dataset
-    full_merged_clean = full_merged_data.filter(
-        (~pl.col(x_col).is_nan()) & (~pl.col(y_col).is_nan())
+    all_data = all_data.filter(
+        (~pl.col(x_column).is_nan()) & (~pl.col(y_column).is_nan())
     )
-
-    # Add colormap column to polars dataframe if needed
-    if colormap is not None:
-        # Extract coordinates for colormap calculation
-        all_x_coords = full_merged_clean[x_col].to_numpy().ravel()
-        all_y_coords = full_merged_clean[y_col].to_numpy().ravel()
-        points = np.column_stack([all_x_coords, all_y_coords])
-        colormap_values = colormap(points)
-
-        # Add colormap column to the polars dataframe
-        full_merged_clean = full_merged_clean.with_columns(
-            pl.lit(colormap_values).alias("colormap")
-        )
 
     # Set default labels using actual column names from the data
     if x_label is None:
-        x_label = x_col
+        x_label = x_column
     if y_label is None:
-        y_label = y_col
+        y_label = y_column
 
-    # Create selection tracking state container
-    class SelectionState:
-        def __init__(self):
-            self.selected_ids = set()  # Will hold selected point IDs from join_column
-            self.current_plot_data = (
-                merged_data  # Track the currently displayed data for selection
-            )
-            self.current_full_data = full_merged_clean  # Track the current full merged data
+    selection_state = SelectionState(all_data)
 
-    selection_state = SelectionState()
-
-    # Initial plot creation
-    plot_result = _create_plot_data(
-        full_merged_clean,
-        x_col,
-        y_col,
+    scatter = init_plot(
+        None,
+        all_data,
+        x_column,
+        y_column,
+        x_label,
+        y_label,
         category_column,
-        unique_classes,
-        join_column,
+        unique_categories,
         default_category,
+        join_column,
+        category_color_list,
     )
-    if plot_result[0] is None:
-        raise ValueError("No valid data points to plot")
 
-    plot_df, axis_min, axis_max, selection_state.current_plot_data = plot_result
-
-    # Create scatter plot using jscatter.Scatter (not jscatter.plot)
-    try:
-        # plot_df is already prepared with all necessary data and colors
-
-        # Create diagonal line annotation extending far beyond data range
-        # Use 100x the data range to ensure it remains visible during panning
-        data_range = axis_max - axis_min
-        line_extend = data_range * 50  # Extend 50x beyond each side
-        line_min = axis_min - line_extend
-        line_max = axis_max + line_extend
-        # Style to match typical grid lines: light gray, thin
-        diagonal_line = jscatter.Line(
-            [(line_min, line_min), (line_max, line_max)],  # type: ignore
-            line_color="#e0e0e0",
-            line_width=1,
-        )
-
-        # Create scatter plot using the correct API with square aspect ratio
-        if colormap is not None and "colormap" in plot_df.columns:
-            # Use density-based coloring
-            scatter = jscatter.Scatter(
-                data=plot_df,
-                x="x_data",
-                y="y_data",
-                x_label=x_label,
-                y_label=y_label,
-                width=500,
-                height=500,
-                aspect_ratio=1.0,
-                axes=True,
-                axes_grid=True,
-                annotations=[diagonal_line],
-                color_by="colormap",
-                color_map="viridis",
-            )
-        else:
-            # Use class-based coloring with predefined color list
-            scatter = jscatter.Scatter(
-                data=plot_df,
-                x="x_data",
-                y="y_data",
-                x_label=x_label,
-                y_label=y_label,
-                width=500,
-                height=500,
-                aspect_ratio=1.0,
-                axes=True,
-                axes_grid=True,
-                annotations=[diagonal_line],
-                color_by=category_column,
-                color_map=class_color_list,
-            )
-
-        # Set identical axis ranges using the scale parameter
-        shared_range = (axis_min, axis_max)
-        scatter.x("x_data", scale=shared_range)
-        scatter.y("y_data", scale=shared_range)
-
-        # Set axis labels using the axes() method
-        # Try to configure axes with better spacing
-        scatter.axes(axes=True, grid=True, labels=[x_label, y_label])
-
-        # Workaround for jupyter-scatter Button widget bug
-        # Add missing _dblclick_handler attribute to prevent AttributeError
+    # Workaround for jupyter-scatter Button widget bug
+    # Add missing _dblclick_handler attribute to prevent AttributeError
+    def fix_button_widgets(widget):
+        """Recursively fix Button widgets missing _dblclick_handler attribute"""
         try:
-            if hasattr(scatter, "widget") and hasattr(scatter.widget, "children"):
-                for widget in scatter.widget.children:
-                    if hasattr(widget, "children"):
-                        for child in widget.children:
-                            if hasattr(child, "_click_handler") and not hasattr(
-                                child, "_dblclick_handler"
-                            ):
-                                child._dblclick_handler = None
-        except Exception as e:
-            print(f"Warning: Could not apply Button widget fix: {e}")
+            # Check if this widget needs the fix
+            if (
+                hasattr(widget, "_click_handler")
+                and not hasattr(widget, "_dblclick_handler")
+                and hasattr(widget, "__category__")
+                and "Button" in str(widget.__category__)
+            ):
+                widget._dblclick_handler = None
 
+            # Recursively check children
+            if hasattr(widget, "children"):
+                for child in widget.children:
+                    fix_button_widgets(child)
+        except Exception as e:
+            pass  # Silently ignore errors in fix attempts
+
+    try:
+        if hasattr(scatter, "widget"):
+            fix_button_widgets(scatter.widget)
     except Exception as e:
-        print(f"Error creating plot: {e}")
-        # Fallback: try basic version with minimal plot_df
-        basic_plot_df = pd.DataFrame(
-            {"x_data": plot_df["x_data"], "y_data": plot_df["y_data"]}
-        )
-        scatter = jscatter.Scatter(data=basic_plot_df, x="x_data", y="y_data")
+        print(f"Warning: Could not apply Button widget fix: {e}")
 
     # Set up selection callback for lasso selection
     def on_selection_change(change):
@@ -867,8 +772,8 @@ def scatterplot(
             if hasattr(selected_indices, "tolist"):
                 selected_indices = selected_indices.tolist()
             # Convert indices to IDs using the current plot data
-            selected_rows = selection_state.current_plot_data[selected_indices]
-            selected_ids = set(selected_rows[join_column].to_list())
+            selected_rows = selection_state.plot_data[selected_indices]
+            selected_ids = selected_rows[join_column].to_list()
             selection_state.selected_ids = selected_ids
             print(f"Selected {len(selected_indices)} points")
         else:
@@ -878,82 +783,70 @@ def scatterplot(
 
     scatter.widget.observe(on_selection_change, names=["selection"])
 
-    # Create class filter dropdown
-    class_dropdown = widgets.Dropdown(
-        options=available_classes,
+    # Create category filter dropdown
+    category_dropdown = widgets.Dropdown(
+        options=available_categories,
         value=default_category,
         description="Class:",
         disabled=False,
     )
 
-    def update_plot(change, data_df, x_column, y_column):
-        """Update the plot when class filter changes"""
-
-        selected_class = change["new"]
-        print(f"Filtering by class: {selected_class}")
-
-        # Create new plot with filtered data
-        plot_result = _create_plot_data(
-            data_df, x_column, y_column, category_column, unique_classes, join_column, selected_class
+    # Connect dropdown callback with wrapper to pass current data
+    def on_category_change(change):
+        init_plot(
+            scatter,
+            all_data,
+            x_column,
+            y_column,
+            x_label,
+            y_label,
+            category_column,
+            unique_categories,
+            change["new"],
+            join_column,
+            colormap,
         )
 
-        if plot_result[0] is None:
-            return
-
-        new_plot_df, _, _, new_current_data = plot_result
-
-        # Update the selection state with new filtered data
-        selection_state.current_plot_data = new_current_data
-
-        # Use scatter.data() now that we're using list-based color mapping
-        # Disable animation and keep existing scales
-        scatter.data(new_plot_df, reset_scales=False, animate=False)
-
-        # Keep the original axis ranges static - don't recalculate based on filtered data
-        # This prevents zooming/panning animation between class changes
-        original_shared_range = (axis_min, axis_max)
-        scatter.x("x_data", scale=original_shared_range)
-        scatter.y("y_data", scale=original_shared_range)
-
-        print(f"Updated plot in-place for class: {selected_class}")
-
-    # Connect dropdown callback with wrapper to pass current data
-    def on_class_change(change):
-        update_plot(change, full_merged_clean, x_col, y_col)
-
-    class_dropdown.observe(on_class_change, names="value")
+    category_dropdown.observe(on_category_change, names="value")
 
     # Set up apply button callback if metadata table is available
     if apply_handler is not None and apply_button is not None:
         # Create callback to update global variables
         def update_globals_callback(
-            new_full_merged_data, new_x_col, new_y_col, new_x_label, new_y_label
+            new_all_data, new_x_column, new_y_col, new_x_label, new_y_label
         ):
-            nonlocal full_merged_clean, x_col, y_col, x_label, y_label
-
             # Update global state
-            full_merged_clean = new_full_merged_data
-            x_col = new_x_col
-            y_col = new_y_col
+            all_data = new_all_data
+            x_column = new_x_column
+            y_column = new_y_col
             x_label = new_x_label
             y_label = new_y_label
 
             # Update selection state with new data
-            selection_state.current_full_data = new_full_merged_data
+            selection_state.plot_data = new_all_data
 
             # Trigger plot refresh with new data
-            update_plot({"new": class_dropdown.value}, full_merged_clean, x_col, y_col)
+            init_plot(
+                scatter,
+                all_data,
+                x_column,
+                y_column,
+                x_label,
+                y_label,
+                category_column,
+                unique_categories,
+                category_dropdown.value,
+                join_column,
+                category_color_list,
+            )
 
-            # Update the scatter plot axis labels
-            scatter.axes(axes=True, grid=True, labels=[new_x_label, new_y_label])
-
-        on_apply_click = apply_handler(
+        on_click = apply_handler(
             metadata,
             category_column,
             colormap,
             update_globals_callback,
         )
-        apply_button.on_click(on_apply_click)
+        apply_button.on_click(on_click)
 
     # Create layout with plot and dropdown
     plot_widget = scatter.show()
@@ -962,13 +855,13 @@ def scatterplot(
     if hasattr(plot_widget, "layout"):
         plot_widget.layout.padding = "0 20px 0 0"  # Right padding for axis labels
 
-    # Create legend for class colors (only when using class-based coloring)
+    # Create legend for category colors (only when using category-based coloring)
     legend_widget = None
-    if colormap is None:  # Only show legend for class-based coloring
-        legend_widget = create_class_legend(unique_classes, class_color_map)
+    if colormap is None:  # Only show legend for category-based coloring
+        legend_widget = _create_category_legend(unique_categories, category_color_map)
 
     # Create filter controls (just dropdown, legend will be separate)
-    filter_controls = HBox([class_dropdown])
+    filter_controls = HBox([category_dropdown])
 
     # Create plot area with legend positioned to the right
     if legend_widget:
@@ -1004,8 +897,8 @@ def scatterplot(
             [metadata_title, apply_controls, metadata_table_widget]
         )
 
-        # Add debug output if it exists
-        if debug_output:
+        # Add debug output if it exists and debug is True
+        if debug and debug_output:
             debug_title = widgets.HTML("<h5>Debug Output</h5>")
             container_elements.extend([debug_title, debug_output])
 
@@ -1024,16 +917,18 @@ def scatterplot(
         """Return DataFrame of currently selected points with full metadata, empty if none selected"""
         if len(selection_state.selected_ids) > 0:
             # Filter the current full data by selected IDs to get complete metadata
-            return selection_state.current_full_data.filter(pl.col(join_column).is_in(list(selection_state.selected_ids)))
+            return selection_state.plot_data.filter(
+                pl.col(join_column).is_in(list(selection_state.selected_ids))
+            )
         else:
             return pl.DataFrame()
 
     return ScatterplotResult(
         scatter=scatter,
-        merged_data=merged_data,
+        plot_data=None,
         container=container,
         selection=get_selection,
-        class_dropdown=class_dropdown,
+        category_dropdown=category_dropdown,
         metadata_table=metadata_table_widget,
         datagrid=datagrid,
     )
