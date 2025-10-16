@@ -15,10 +15,72 @@ from ipydatagrid import DataGrid
 SCALE = (-10, 10)
 
 
+def load_tsv_for_scatterplot(
+    tsv_file: str,
+    x_column: str = "N2",
+    y_column: str = "N1",
+    join_column: str = "cCRE",
+    category_column: str = "cCRE_type",
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """
+    Load a TSV file and prepare it for scatterplot() function.
+
+    Supports both local file paths and remote HTTP/HTTPS URLs (requires fsspec).
+
+    Parameters:
+    -----------
+    tsv_file : str
+        Path to the TSV file (local path or HTTP/HTTPS URL)
+    x_column : str, default "N2"
+        Column to use for x-axis values
+    y_column : str, default "N1"
+        Column to use for y-axis values
+    join_column : str, default "cCRE"
+        Column to use as the join key
+    category_column : str, default "cCRE_type"
+        Column to use for categorical coloring
+
+    Returns:
+    --------
+    tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]
+        Returns (x_data, y_data, metadata) suitable for scatterplot() function
+
+    Example:
+    --------
+    >>> x, y, metadata = load_tsv_for_scatterplot("data.tsv")
+    >>> result = scatterplot(
+    ...     x, y, metadata,
+    ...     join_column="cCRE",
+    ...     category_column="cCRE_type",
+    ...     x_label="N2",
+    ...     y_label="N1"
+    ... )
+    """
+    # Load the TSV file
+    df = pl.read_csv(tsv_file, separator="\t")
+
+    # Validate required columns exist
+    required_cols = [x_column, y_column, join_column, category_column]
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in TSV: {missing}")
+
+    # Split into x, y, and metadata DataFrames
+    x_data = df.select([join_column, x_column])
+    y_data = df.select([join_column, y_column])
+
+    # Metadata includes all other columns needed for plot
+    metadata_cols = [col for col in df.columns if col not in [x_column, y_column]]
+    metadata = df.select(metadata_cols)
+
+    return x_data, y_data, metadata
+
+
 class ScatterplotResult(NamedTuple):
     """Named tuple for scatterplot function return value."""
 
-    scatter: Any
+    comparison_scatter: Any
+    n_scatter: Any | None
     plot_data: pd.DataFrame
     container: Any
     selection: Callable[[], pl.DataFrame]
@@ -460,12 +522,35 @@ def create_plot(
     plot_data,
     category_column,
     category_color_list,
+    disable_density_opacity=False,
+    scale=None,
+    show_diagonal=True,
+    point_size=None,
 ):
-    diagonal_line = jscatter.Line(
-        [(-500, -500), (500, 500)],  # type: ignore
-        line_color="#e0e0e0",
-        line_width=1,
-    )
+    # Use provided scale or default SCALE
+    if scale is None:
+        scale = SCALE
+
+    # Only add diagonal line if requested
+    annotations = []
+    if show_diagonal:
+        diagonal_line = jscatter.Line(
+            [(-500, -500), (500, 500)],  # type: ignore
+            line_color="#e0e0e0",
+            line_width=1,
+        )
+        annotations.append(diagonal_line)
+
+    # Set opacity parameters based on whether density opacity should be disabled
+    opacity_params = {}
+    if disable_density_opacity:
+        opacity_params['opacity'] = 0.11  # Fixed opacity value
+
+    # Set size parameter if provided
+    size_params = {}
+    if point_size is not None:
+        size_params['size'] = point_size
+
     scatter = jscatter.Scatter(
         data=plot_data,
         x="x_data",
@@ -475,13 +560,20 @@ def create_plot(
         aspect_ratio=1.0,
         axes=True,
         axes_grid=True,
-        annotations=[diagonal_line],
+        annotations=annotations,
         color_by=category_column,
         color_map=category_color_list,
         use_index=True,
+        **opacity_params,
+        **size_params,
     )
-    scatter.x("x_data", scale=SCALE)
-    scatter.y("y_data", scale=SCALE)
+    scatter.x("x_data", scale=scale)
+    scatter.y("y_data", scale=scale)
+
+    # If disabling density opacity, explicitly set it after creation
+    if disable_density_opacity:
+        scatter.opacity(default=0.11)
+
     return scatter
 
 
@@ -497,6 +589,10 @@ def init_plot(
     selected_category,
     join_column,
     category_color_list,
+    disable_density_opacity=False,
+    scale=None,
+    show_diagonal=True,
+    point_size=None,
 ):
     """Update the plot when category filter changes"""
 
@@ -519,7 +615,7 @@ def init_plot(
     new_plot_df, _, _ = plot_result
 
     if not scatter:
-        scatter = create_plot(new_plot_df, category_column, category_color_list)
+        scatter = create_plot(new_plot_df, category_column, category_color_list, disable_density_opacity, scale, show_diagonal, point_size)
     else:
         scatter.data(new_plot_df, reset_scales=False, animate=False, use_index=True)
     scatter.axes(axes=True, grid=True, labels=[x_label, y_label])
@@ -544,6 +640,12 @@ def scatterplot(
     sample_id_column: str | None = None,
     data_file: str | None = None,
     debug: bool = False,
+    n1: pl.DataFrame | None = None,
+    n2: pl.DataFrame | None = None,
+    n1_label: str = "N1",
+    n2_label: str = "N2",
+    n_title: str = "N Plot",
+    n_point_size: float | None = None,
 ) -> ScatterplotResult:
     """
     Create a JScatter scatterplot with two datasets and interactive selection.
@@ -587,17 +689,32 @@ def scatterplot(
         If not provided, metadata table and biosample selection will be disabled
     debug : bool, default False
         Whether to show the debug output window below the metadata table
+    n1 : pl.DataFrame, optional
+        Dataset for N1 values (y-axis) in the N-data plot. If provided along with n2,
+        a second plot will be displayed to the right of the comparison plot.
+    n2 : pl.DataFrame, optional
+        Dataset for N2 values (x-axis) in the N-data plot
+    n1_label : str, default "N1"
+        Label for N1 axis (y-axis) in the N-data plot
+    n2_label : str, default "N2"
+        Label for N2 axis (x-axis) in the N-data plot
+    n_title : str, default "N Plot"
+        Title for the N-data plot
+    n_point_size : float, optional
+        Size of point glyphs in the N-data plot. If not specified, uses jscatter's default size.
 
     Returns:
     --------
     ScatterplotResult
         Named tuple containing:
-        - scatter: The jscatter plot object
+        - comparison_scatter: The comparison jscatter plot object
+        - n_scatter: The N-data jscatter plot object (None if n1/n2 not provided)
         - plot_data: The merged dataset used for plotting
         - container: The plot container widget
-        - selection: Function that returns DataFrame of currently selected points
+        - selection: Function that returns DataFrame of currently selected points (synced across both plots)
         - category_dropdown: The category filter dropdown widget
         - metadata_table: ITables widget for sample metadata (None if not provided)
+        - datagrid: List for tracking metadata table selections
     """
 
     # Validate inputs
@@ -652,14 +769,14 @@ def scatterplot(
         """Create an interpolated colormap with exactly n_categories colors."""
         # Base color palette for interpolation
         base_colors = [
-            "#8f2be7",  # Purple
-            "#fb4fd9",  # Pink
-            "#e9162d",  # Red
-            "#f28200",  # Orange
-            "#ffdb28",  # Yellow
-            "#1fb819",  # Green
-            "#00e1da",  # Cyan
-            "#007bd8",  # Blue
+            "#06DA93",  # CA
+            "#00B0F0",  # CA-CTCF
+            "#ffaaaa",  # CA-H3K4me3
+            "#be28e5",  # CA-TF
+            "#FF0000",  # PLS
+            "#d876ec",  # TF
+            "#FFCD00",  # dELS
+            "#FFA700",  # pELS
         ]
 
         if n_categories <= len(base_colors):
@@ -721,6 +838,7 @@ def scatterplot(
 
     selection_state = SelectionState(all_data)
 
+    # Create comparison scatter plot
     scatter = init_plot(
         None,
         all_data,
@@ -734,6 +852,63 @@ def scatterplot(
         join_column,
         category_color_list,
     )
+
+    # Create N-data scatter plot if n1 and n2 are provided
+    n_scatter = None
+    n_all_data = None
+    n_x_column = None
+    n_y_column = None
+
+    if n1 is not None and n2 is not None:
+        # Validate n1 and n2 inputs
+        if join_column not in n1.columns:
+            raise ValueError(f"Column '{join_column}' not found in n1")
+        if join_column not in n2.columns:
+            raise ValueError(f"Column '{join_column}' not found in n2")
+
+        # Prepare N-data similar to comparison data
+        n_all_data = n1.join(n2, on=join_column, how="inner", suffix="_y").join(
+            metadata, on=join_column, how="inner"
+        )
+
+        if len(n_all_data) == 0:
+            raise ValueError("No matching records found for N-data between datasets")
+
+        # Get column names for N-data plot
+        n_x_column, *extra_nx = [
+            c for c in n2.columns if c != join_column and n2[c].dtype.is_numeric()
+        ]
+        n_y_column, *extra_ny = [
+            c for c in n1.columns if c != join_column and n1[c].dtype.is_numeric()
+        ]
+        if extra_nx:
+            raise ValueError("Expected a single data column for n2")
+        if extra_ny:
+            raise ValueError("Expected a single data column for n1")
+
+        # Filter out NaN values for N-data
+        n_all_data = n_all_data.filter(
+            (~pl.col(n_x_column).is_nan()) & (~pl.col(n_y_column).is_nan())
+        )
+
+        # Create N-data scatter plot (with density opacity disabled and custom scale)
+        n_scatter = init_plot(
+            None,
+            n_all_data,
+            n_x_column,
+            n_y_column,
+            n2_label,
+            n1_label,
+            category_column,
+            unique_categories,
+            default_category,
+            join_column,
+            category_color_list,
+            disable_density_opacity=True,  # Disable automatic density-based opacity
+            scale=(0, 450),  # Custom scale for N-data: 0-450 on both axes
+            show_diagonal=False,  # No diagonal line for N-data plot
+            point_size=n_point_size,  # Custom point size for N-data plot
+        )
 
     # Workaround for jupyter-scatter Button widget bug
     # Add missing _dblclick_handler attribute to prevent AttributeError
@@ -759,29 +934,78 @@ def scatterplot(
     try:
         if hasattr(scatter, "widget"):
             fix_button_widgets(scatter.widget)
+        if n_scatter and hasattr(n_scatter, "widget"):
+            fix_button_widgets(n_scatter.widget)
     except Exception as e:
         print(f"Warning: Could not apply Button widget fix: {e}")
 
-    # Set up selection callback for lasso selection
-    def on_selection_change(change):
-        """Callback for when selection changes in the scatter plot."""
-        # Get the new selection indices
+    # Set up linked selection callbacks for both plots
+    def sync_selection_to_n_scatter(selected_ids):
+        """Sync selection from comparison scatter to n_scatter."""
+        if n_scatter and n_all_data is not None:
+            # Find indices in n_all_data that match the selected IDs
+            n_indices = []
+            for i, row in enumerate(n_all_data.iter_rows(named=True)):
+                if row[join_column] in selected_ids:
+                    n_indices.append(i)
+            # Update n_scatter selection
+            if hasattr(n_scatter, "widget"):
+                n_scatter.widget.selection = n_indices
+
+    def sync_selection_to_comparison(selected_ids):
+        """Sync selection from n_scatter to comparison scatter."""
+        # Find indices in all_data that match the selected IDs
+        indices = []
+        for i, row in enumerate(selection_state.plot_data.iter_rows(named=True)):
+            if row[join_column] in selected_ids:
+                indices.append(i)
+        # Update comparison scatter selection
+        if hasattr(scatter, "widget"):
+            scatter.widget.selection = indices
+
+    def on_comparison_selection_change(change):
+        """Callback for when selection changes in the comparison scatter plot."""
         selected_indices = change.get("new", [])
         if selected_indices is not None and len(selected_indices) > 0:
-            # Convert to list if it's a numpy array
             if hasattr(selected_indices, "tolist"):
                 selected_indices = selected_indices.tolist()
             # Convert indices to IDs using the current plot data
             selected_rows = selection_state.plot_data[selected_indices]
             selected_ids = selected_rows[join_column].to_list()
             selection_state.selected_ids = selected_ids
-            print(f"Selected {len(selected_indices)} points")
+            print(f"Selected {len(selected_indices)} points in comparison plot")
+            # Sync to n_scatter
+            sync_selection_to_n_scatter(set(selected_ids))
         else:
-            # No selection - empty set
             selection_state.selected_ids = set()
             print("No points selected")
+            # Clear n_scatter selection
+            if n_scatter and hasattr(n_scatter, "widget"):
+                n_scatter.widget.selection = []
 
-    scatter.widget.observe(on_selection_change, names=["selection"])
+    def on_n_selection_change(change):
+        """Callback for when selection changes in the N-data scatter plot."""
+        selected_indices = change.get("new", [])
+        if selected_indices is not None and len(selected_indices) > 0:
+            if hasattr(selected_indices, "tolist"):
+                selected_indices = selected_indices.tolist()
+            # Convert indices to IDs using n_all_data
+            selected_rows = n_all_data[selected_indices]
+            selected_ids = selected_rows[join_column].to_list()
+            selection_state.selected_ids = selected_ids
+            print(f"Selected {len(selected_indices)} points in N-data plot")
+            # Sync to comparison scatter
+            sync_selection_to_comparison(set(selected_ids))
+        else:
+            selection_state.selected_ids = set()
+            print("No points selected")
+            # Clear comparison scatter selection
+            if hasattr(scatter, "widget"):
+                scatter.widget.selection = []
+
+    scatter.widget.observe(on_comparison_selection_change, names=["selection"])
+    if n_scatter and hasattr(n_scatter, "widget"):
+        n_scatter.widget.observe(on_n_selection_change, names=["selection"])
 
     # Create category filter dropdown
     category_dropdown = widgets.Dropdown(
@@ -793,6 +1017,7 @@ def scatterplot(
 
     # Connect dropdown callback with wrapper to pass current data
     def on_category_change(change):
+        # Update comparison plot
         init_plot(
             scatter,
             all_data,
@@ -804,8 +1029,27 @@ def scatterplot(
             unique_categories,
             change["new"],
             join_column,
-            colormap,
+            category_color_list,
         )
+        # Update N-data plot if it exists
+        if n_scatter and n_all_data is not None:
+            init_plot(
+                n_scatter,
+                n_all_data,
+                n_x_column,
+                n_y_column,
+                n2_label,
+                n1_label,
+                category_column,
+                unique_categories,
+                change["new"],
+                join_column,
+                category_color_list,
+                disable_density_opacity=True,
+                scale=(0, 450),  # Custom scale for N-data plot
+                show_diagonal=False,  # No diagonal line for N-data plot
+                point_size=n_point_size,  # Custom point size for N-data plot
+            )
 
     category_dropdown.observe(on_category_change, names="value")
 
@@ -848,12 +1092,19 @@ def scatterplot(
         )
         apply_button.on_click(on_click)
 
-    # Create layout with plot and dropdown
-    plot_widget = scatter.show()
+    # Create layout with plot(s) and dropdown
+    comparison_plot_widget = scatter.show()
 
-    # Add some right padding to the plot to give axis labels more space
-    if hasattr(plot_widget, "layout"):
-        plot_widget.layout.padding = "0 20px 0 0"  # Right padding for axis labels
+    # Add some right padding to the comparison plot
+    if hasattr(comparison_plot_widget, "layout"):
+        comparison_plot_widget.layout.padding = "0 20px 0 0"
+
+    # Create N-data plot widget if available
+    n_plot_widget = None
+    if n_scatter:
+        n_plot_widget = n_scatter.show()
+        if hasattr(n_plot_widget, "layout"):
+            n_plot_widget.layout.padding = "0 20px 0 0"
 
     # Create legend for category colors (only when using category-based coloring)
     legend_widget = None
@@ -863,22 +1114,40 @@ def scatterplot(
     # Create filter controls (just dropdown, legend will be separate)
     filter_controls = HBox([category_dropdown])
 
-    # Create plot area with legend positioned to the right
-    if legend_widget:
-        # Add spacing between plot and legend
-        legend_widget.layout.margin = "0 0 0 20px"  # Left margin for spacing from plot
-        # Create a container with plot on left and legend on right
-        plot_with_legend = HBox([plot_widget, legend_widget])
-        # Ensure proper spacing in the HBox
-        plot_with_legend.layout.align_items = "flex-start"
+    # Create plot area with both plots and legend
+    plots_row_elements = []
+
+    # Add title for comparison plot if n_scatter exists
+    if n_scatter and title:
+        comparison_title_widget = widgets.HTML(f"<h4>{title}</h4>")
+        comparison_with_title = VBox([comparison_title_widget, comparison_plot_widget])
+        plots_row_elements.append(comparison_with_title)
     else:
-        plot_with_legend = plot_widget
+        plots_row_elements.append(comparison_plot_widget)
+
+    # Add N-data plot if available
+    if n_plot_widget:
+        if n_title:
+            n_title_widget = widgets.HTML(f"<h4>{n_title}</h4>")
+            n_with_title = VBox([n_title_widget, n_plot_widget])
+            plots_row_elements.append(n_with_title)
+        else:
+            plots_row_elements.append(n_plot_widget)
+
+    # Add legend at the end
+    if legend_widget:
+        legend_widget.layout.margin = "0 0 0 20px"  # Left margin for spacing
+        plots_row_elements.append(legend_widget)
+
+    # Create horizontal box with all plots and legend
+    plot_with_legend = HBox(plots_row_elements)
+    plot_with_legend.layout.align_items = "flex-start"
 
     # Create the main container components
     container_elements = []
 
-    if title:
-        # Create container widget with user-specified title
+    # Only add main title if there's no n_scatter (single plot mode)
+    if title and not n_scatter:
         title_widget = widgets.HTML(f"<h3>{title}</h3>")
         container_elements.append(title_widget)
 
@@ -924,7 +1193,8 @@ def scatterplot(
             return pl.DataFrame()
 
     return ScatterplotResult(
-        scatter=scatter,
+        comparison_scatter=scatter,
+        n_scatter=n_scatter,
         plot_data=None,
         container=container,
         selection=get_selection,

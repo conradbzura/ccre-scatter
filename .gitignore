@@ -170,3 +170,6 @@ cython_debug/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# data
+cCREs_N1_N2_zoonomia_replicate_447_wgroups.tsv
