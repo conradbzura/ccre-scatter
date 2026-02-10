@@ -1,0 +1,99 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.19.9"
+  },
+  "cells": [
+    {
+      "id": "PKri",
+      "code_hash": "7b4a06eba5988dbac096e1061eb9feba",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"jscatter-poc-comparison-scatter-plot\">jscatter POC \u2014 comparison scatter plot</h2></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Hbol",
+      "code_hash": "f805337826b01505cd218c6772769174",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "b20eb99d21d01e2cc674c23f8bb1192a",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "0e6e809f3ba8bac5709cb4070c891bd3",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "da186bf9df83edfe60dcbfcb8ceaef16",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "4a1f5192d27acde33192c2a03e9418dc",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "96401119ba1de172fc11d8c5dc596b97",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>Selected points:</strong> {'annotations': None, 'axes': True, 'axes_color': [0, 0, 0, 1], 'axes_grid': True, 'axes_labels': False, 'background_color': [1.0, 1.0, 1.0, 1.0], 'background_image': None, 'camera_distance': 1.0, 'camera_is_fixed': False, 'camera_rotation': 0.0, 'camera_target': [0, 0], 'camera_view': None, 'color': [[0.023529411764705882, 0.8549019607843137, 0.5764705882352941, 1.0], [0.0, 0.6901960784313725, 0.9411764705882353, 1.0], [1.0, 0.6666666666666666, 0.6666666666666666, 1.0], [0.7450980392156863, 0.1568627450980392, 0.8980392156862745, 1.0], [1.0, 0.0, 0.0, 1.0], [0.8470588235294118, 0.4627450980392157, 0.9254901960784314, 1.0], [1.0, 0.803921568627451, 0.0, 1.0], [1.0, 0.6549019607843137, 0.0, 1.0]], 'color_by': 'valueA', 'color_domain': {'pELS': 7, 'CA-CTCF': 1, 'CA-TF': 3, 'CA': 0, 'dELS': 6, 'TF': 5, 'CA-H3K4me3': 2, 'PLS': 4}, 'color_histogram': [np.float64(0.10472553849664559), np.float64(0.05365765603140936), np.float64(0.03373815486190287), np.float64(0.011112653234300642), np.float64(0.020236251380460427), np.float64(0.044824412245290685), np.float64(0.6254986474255105), np.float64(0.10620668632447994)], 'color_histogram_range': None, 'color_hover': [0, 0, 0, 1], 'color_scale': 'categorical', 'color_selected': [0, 0.55, 1, 1], 'color_title': 'class', 'connect': False, 'connection_color': [0, 0, 0, 0.1], 'connection_color_by': None, 'connection_color_hover': [0, 0, 0, 0.66], 'connection_color_selected': [0, 0.55, 1, 1], 'connection_opacity': 0.1, 'connection_opacity_by': None, 'connection_size': 2, 'connection_size_by': None, 'dom_element_id': '', 'event_types': {'FULL_SCREEN': 'full_screen', 'TOOLTIP': 'tooltip', 'VIEW_DOWNLOAD': 'view_download', 'VIEW_RESET': 'view_reset', 'VIEW_SAVE': 'view_save'}, 'filter': None, 'height': 600, 'hovering': None, 'label_align': 'center', 'label_offset': [0, 0], 'label_scale_function': 'constant', 'label_shadow_color': '#ffffff', 'label_tile_size': 256, 'label_tiles': ['0,0,0'], 'labels': None, 'lasso_brush_size': 24, 'lasso_color': [0, 0.666666667, 1, 1], 'lasso_initiator': False, 'lasso_min_delay': 10, 'lasso_min_dist': 3.0, 'lasso_on_long_press': True, 'lasso_selection_polygon': None, 'lasso_type': 'freeform', 'legend': False, 'legend_color': [0, 0, 0, 1], 'legend_encoding': {'color': {'variable': None, 'values': [('CA', (0.023529411764705882, 0.8549019607843137, 0.5764705882352941, 1.0), None), ('CA-CTCF', (0.0, 0.6901960784313725, 0.9411764705882353, 1.0), None), ('CA-H3K4me3', (1.0, 0.6666666666666666, 0.6666666666666666, 1.0), None), ('CA-TF', (0.7450980392156863, 0.1568627450980392, 0.8980392156862745, 1.0), None), ('PLS', (1.0, 0.0, 0.0, 1.0), None), ('TF', (0.8470588235294118, 0.4627450980392157, 0.9254901960784314, 1.0), None), ('dELS', (1.0, 0.803921568627451, 0.0, 1.0), None), ('pELS', (1.0, 0.6549019607843137, 0.0, 1.0), None)], 'categorical': True, 'data_dimension': 'class:linear'}}, 'legend_position': 'top-left', 'legend_size': 'small', 'mouse_mode': 'panZoom', 'non_spatial_points_update': False, 'opacity': [0.00390625, 0.0078125, 0.01171875, 0.015625, 0.01953125, 0.0234375, 0.02734375, 0.03125, 0.03515625, 0.0390625, 0.04296875, 0.046875, 0.05078125, 0.0546875, 0.05859375, 0.0625, 0.06640625, 0.0703125, 0.07421875, 0.078125, 0.08203125, 0.0859375, 0.08984375, 0.09375, 0.09765625, 0.1015625, 0.10546875, 0.109375, 0.11328125, 0.1171875, 0.12109375, 0.125, 0.12890625, 0.1328125, 0.13671875, 0.140625, 0.14453125, 0.1484375, 0.15234375, 0.15625, 0.16015625, 0.1640625, 0.16796875, 0.171875, 0.17578125, 0.1796875, 0.18359375, 0.1875, 0.19140625, 0.1953125, 0.19921875, 0.203125, 0.20703125, 0.2109375, 0.21484375, 0.21875, 0.22265625, 0.2265625, 0.23046875, 0.234375, 0.23828125, 0.2421875, 0.24609375, 0.25, 0.25390625, 0.2578125, 0.26171875, 0.265625, 0.26953125, 0.2734375, 0.27734375, 0.28125, 0.28515625, 0.2890625, 0.29296875, 0.296875, 0.30078125, 0.3046875, 0.30859375, 0.3125, 0.31640625, 0.3203125, 0.32421875, 0.328125, 0.33203125, 0.3359375, 0.33984375, 0.34375, 0.34765625, 0.3515625, 0.35546875, 0.359375, 0.36328125, 0.3671875, 0.37109375, 0.375, 0.37890625, 0.3828125, 0.38671875, 0.390625, 0.39453125, 0.3984375, 0.40234375, 0.40625, 0.41015625, 0.4140625, 0.41796875, 0.421875, 0.42578125, 0.4296875, 0.43359375, 0.4375, 0.44140625, 0.4453125, 0.44921875, 0.453125, 0.45703125, 0.4609375, 0.46484375, 0.46875, 0.47265625, 0.4765625, 0.48046875, 0.484375, 0.48828125, 0.4921875, 0.49609375, 0.5, 0.50390625, 0.5078125, 0.51171875, 0.515625, 0.51953125, 0.5234375, 0.52734375, 0.53125, 0.53515625, 0.5390625, 0.54296875, 0.546875, 0.55078125, 0.5546875, 0.55859375, 0.5625, 0.56640625, 0.5703125, 0.57421875, 0.578125, 0.58203125, 0.5859375, 0.58984375, 0.59375, 0.59765625, 0.6015625, 0.60546875, 0.609375, 0.61328125, 0.6171875, 0.62109375, 0.625, 0.62890625, 0.6328125, 0.63671875, 0.640625, 0.64453125, 0.6484375, 0.65234375, 0.65625, 0.66015625, 0.6640625, 0.66796875, 0.671875, 0.67578125, 0.6796875, 0.68359375, 0.6875, 0.69140625, 0.6953125, 0.69921875, 0.703125, 0.70703125, 0.7109375, 0.71484375, 0.71875, 0.72265625, 0.7265625, 0.73046875, 0.734375, 0.73828125, 0.7421875, 0.74609375, 0.75, 0.75390625, 0.7578125, 0.76171875, 0.765625, 0.76953125, 0.7734375, 0.77734375, 0.78125, 0.78515625, 0.7890625, 0.79296875, 0.796875, 0.80078125, 0.8046875, 0.80859375, 0.8125, 0.81640625, 0.8203125, 0.82421875, 0.828125, 0.83203125, 0.8359375, 0.83984375, 0.84375, 0.84765625, 0.8515625, 0.85546875, 0.859375, 0.86328125, 0.8671875, 0.87109375, 0.875, 0.87890625, 0.8828125, 0.88671875, 0.890625, 0.89453125, 0.8984375, 0.90234375, 0.90625, 0.91015625, 0.9140625, 0.91796875, 0.921875, 0.92578125, 0.9296875, 0.93359375, 0.9375, 0.94140625, 0.9453125, 0.94921875, 0.953125, 0.95703125, 0.9609375, 0.96484375, 0.96875, 0.97265625, 0.9765625, 0.98046875, 0.984375, 0.98828125, 0.9921875, 0.99609375, 1.0], 'opacity_by': 'density', 'opacity_domain': [None, None], 'opacity_histogram': None, 'opacity_histogram_range': None, 'opacity_scale': 'linear', 'opacity_title': 'density', 'opacity_unselected': 0.5, 'points': {'view': <memory at 0x4ea6b7ed0>, 'dtype': 'float32', 'shape': (2348854, 4)}, 'prevent_filter_reset': False, 'regl_scatterplot_options': {}, 'reticle': True, 'reticle_color': [0, 0, 0, 0.1], 'selection': {'view': <memory at 0x301cf74c0>, 'dtype': 'uint32', 'shape': (0,)}, 'size': 3, 'size_by': None, 'size_domain': [None, None], 'size_histogram': None, 'size_histogram_range': None, 'size_scale': 'linear', 'size_scale_function': 'asinh', 'size_title': None, 'tooltip_color': [1, 1, 1, 1], 'tooltip_enable': False, 'tooltip_histograms': True, 'tooltip_histograms_ranges': {}, 'tooltip_histograms_size': 'small', 'tooltip_preview': None, 'tooltip_preview_audio_controls': True, 'tooltip_preview_audio_length': None, 'tooltip_preview_audio_loop': False, 'tooltip_preview_image_background_color': 'auto', 'tooltip_preview_image_height': None, 'tooltip_preview_image_position': 'center', 'tooltip_preview_image_size': 'contain', 'tooltip_preview_text_lines': 3, 'tooltip_preview_type': 'text', 'tooltip_properties': ['x', 'y', 'color', 'opacity', 'size'], 'tooltip_properties_non_visual_info': {}, 'tooltip_size': 'small', 'transition_points': False, 'transition_points_duration': 3000, 'view_data': None, 'view_download': None, 'view_sync': None, 'width': 600, 'x_domain': [np.float64(-10.0), np.float64(6.741932)], 'x_histogram': [np.float64(0.002522500938738934), np.float64(1.4973749864660337e-05), np.float64(2.7643845903988314e-05), np.float64(5.759134563330899e-05), np.float64(0.0001255491334806136), np.float64(0.0002971713434678744), np.float64(0.0006715150900843828), np.float64(0.0022886800754676993), np.float64(0.011275233648089234), np.float64(0.06370985019339175), np.float64(0.3582826721462912), np.float64(1.0), np.float64(0.8111729514182445), np.float64(0.2818796893753182), np.float64(0.09610037480447738), np.float64(0.04681254938457888), np.float64(0.02229706537539191), np.float64(0.007016929551962367), np.float64(0.000865022011412301), np.float64(5.528769180797663e-05)], 'x_histogram_range': None, 'x_scale': 'linear', 'x_scale_domain': [-10.0, 10.0], 'x_title': 'x_data', 'y_domain': [np.float64(-10.979774), np.float64(7.296752)], 'y_histogram': [np.float64(1.780256950419844e-05), np.float64(0.0024947334065216747), np.float64(4.035249087618313e-05), np.float64(5.340770851259532e-05), np.float64(0.00013173901433106844), np.float64(0.0002563570008604575), np.float64(0.0007026080764323651), np.float64(0.002322641901314423), np.float64(0.010407382132154407), np.float64(0.053262914280627835), np.float64(0.29313710945613153), np.float64(1.0), np.float64(0.9993970863127911), np.float64(0.29026614841408777), np.float64(0.0787205886716316), np.float64(0.03410853633207726), np.float64(0.01589650772928226), np.float64(0.0056042488799216686), np.float64(0.0008841942853751891), np.float64(4.74735186778625e-06)], 'y_histogram_range': None, 'y_scale': 'linear', 'y_scale_domain': [-10.0, 10.0], 'y_title': 'y_data', 'zoom_animation': 500, 'zoom_level': 0.0, 'zoom_on_filter': False, 'zoom_on_selection': False, 'zoom_padding': 0.33, 'zoom_to': None, 'zoom_to_call_idx': 0}</span></span>"
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}
