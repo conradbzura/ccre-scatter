@@ -10,34 +10,126 @@ def imports():
     import numpy as np
     import polars as pl
     import plotly.graph_objects as go
-    from scatterplot_helpers import (
-        load_tsv_for_scatterplot,
-        merge_datasets,
-        get_numeric_column,
-        create_interpolated_colormap,
-        bin_scatter,
-    )
-    return (
-        mo, np, pl, go,
-        load_tsv_for_scatterplot, merge_datasets, get_numeric_column,
-        create_interpolated_colormap, bin_scatter,
-    )
+    from matplotlib.colors import LinearSegmentedColormap
+    import matplotlib.colors as mcolors
+
+    return mo, np, pl, go, LinearSegmentedColormap, mcolors
+
+
+@app.cell
+def helpers(np, pl, LinearSegmentedColormap, mcolors):
+    _BASE_COLORS = [
+        "#06DA93",  # CA
+        "#00B0F0",  # CA-CTCF
+        "#ffaaaa",  # CA-H3K4me3
+        "#be28e5",  # CA-TF
+        "#FF0000",  # PLS
+        "#d876ec",  # TF
+        "#FFCD00",  # dELS
+        "#FFA700",  # pELS
+    ]
+
+    def create_interpolated_colormap(n_categories: int) -> list[str]:
+        """Return *n_categories* hex colours interpolated from _BASE_COLORS."""
+        if n_categories <= len(_BASE_COLORS):
+            return _BASE_COLORS[:n_categories]
+
+        cmap = LinearSegmentedColormap.from_list("custom", _BASE_COLORS, N=n_categories)
+        return [
+            mcolors.rgb2hex(cmap(i / (n_categories - 1) if n_categories > 1 else 0))
+            for i in range(n_categories)
+        ]
+
+    def bin_scatter(
+        df: pl.DataFrame,
+        x_col: str,
+        y_col: str,
+        category_col: str,
+        id_col: str,
+        n_bins: int = 200,
+        x_range: tuple[float, float] = (-12.0, 9.0),
+        y_range: tuple[float, float] = (-12.0, 9.0),
+    ) -> pl.DataFrame:
+        """Bin points into an n_bins x n_bins grid and return one row per non-empty bin."""
+        x = df[x_col].to_numpy()
+        y = df[y_col].to_numpy()
+
+        x_edges = np.linspace(x_range[0], x_range[1], n_bins + 1)
+        y_edges = np.linspace(y_range[0], y_range[1], n_bins + 1)
+
+        xi = np.clip(np.digitize(x, x_edges) - 1, 0, n_bins - 1)
+        yi = np.clip(np.digitize(y, y_edges) - 1, 0, n_bins - 1)
+
+        binned = pl.DataFrame(
+            {
+                "xi": xi.astype(np.int32),
+                "yi": yi.astype(np.int32),
+                "cat": df[category_col].to_list(),
+                "id": df[id_col].to_list(),
+            }
+        )
+
+        majority = (
+            binned.group_by(["xi", "yi", "cat"])
+            .len()
+            .sort(["xi", "yi", "cat"])
+            .sort(["xi", "yi", "len"], descending=[False, False, True])
+            .group_by(["xi", "yi"], maintain_order=True)
+            .first()
+            .select(["xi", "yi", pl.col("cat").alias("category")])
+        )
+
+        agg = binned.group_by(["xi", "yi"]).agg(
+            [
+                pl.len().alias("count"),
+                pl.col("id").alias("ids"),
+            ]
+        )
+
+        result = agg.join(majority, on=["xi", "yi"], how="inner")
+
+        x_step = (x_range[1] - x_range[0]) / n_bins
+        y_step = (y_range[1] - y_range[0]) / n_bins
+        result = result.with_columns(
+            [
+                (
+                    pl.col("xi").cast(pl.Float64) * x_step + x_range[0] + x_step / 2
+                ).alias("cx"),
+                (
+                    pl.col("yi").cast(pl.Float64) * y_step + y_range[0] + y_step / 2
+                ).alias("cy"),
+            ]
+        )
+
+        return result.select(["cx", "cy", "count", "category", "ids"])
+
+    return (create_interpolated_colormap, bin_scatter)
 
 
 # ── Configuration ────────────────────────────────────────────────────────
 @app.cell
 def config():
-    DATAFILE = "/Users/conrad/Projects/vedatonuryilmaz/simplex-scatter/comb_healthy_scatac_tcga_encode.parquet"
-    TSV_FILE = "cCREs_N1_N2_zoonomia_replicate_447_wgroups.tsv"
-    SAMPLE_METADATA_FILE = "sample_metadata.pq"
+    DATAFILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/comb_healthy_scatac_tcga_encode.parquet"
+    TSV_FILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/cCREs_N1_N2_zoonomia_replicate_447_wgroups.tsv"
+    SAMPLE_METADATA_FILE = (
+        "https://users.abdenlab.org/conrad/itcr/ccre-scatter/sample_metadata.pq"
+    )
     JOIN_COLUMN = "cCRE"
     CATEGORY_COLUMN = "class"
     INITIAL_X = "LGGx-TCGA-DU-6395-02A-11-A644-42-X037-S06"
     INITIAL_Y = "LGGx-TCGA-F6-A8O3-01A-31-A617-42-X013-S07"
+    N_BINS = 150
+    VALIDATE_COLUMNS = False
     return (
-        DATAFILE, TSV_FILE, SAMPLE_METADATA_FILE,
-        JOIN_COLUMN, CATEGORY_COLUMN,
-        INITIAL_X, INITIAL_Y,
+        DATAFILE,
+        TSV_FILE,
+        SAMPLE_METADATA_FILE,
+        JOIN_COLUMN,
+        CATEGORY_COLUMN,
+        INITIAL_X,
+        INITIAL_Y,
+        N_BINS,
+        VALIDATE_COLUMNS,
     )
 
 
@@ -58,61 +150,108 @@ def selection_state(mo):
 
 # ── Load metadata + N-data (runs once) ──────────────────────────────────
 @app.cell
-def load_static(DATAFILE, TSV_FILE, SAMPLE_METADATA_FILE, JOIN_COLUMN, CATEGORY_COLUMN, pl, load_tsv_for_scatterplot):
-    metadata = pl.read_parquet(
-        DATAFILE, columns=[JOIN_COLUMN, "rDHS", "chr", "start", "end", CATEGORY_COLUMN]
-    )
-
-    n2_df, n1_df, _n_meta = load_tsv_for_scatterplot(
-        TSV_FILE,
-        x_column="N2", y_column="N1",
-        join_column=JOIN_COLUMN, category_column="cCRE_type",
-    )
-
+def load_static(DATAFILE, SAMPLE_METADATA_FILE, VALIDATE_COLUMNS, pl):
     sample_metadata_df = pl.read_parquet(SAMPLE_METADATA_FILE)
-
-    _scan = pl.scan_parquet(DATAFILE)
-    available_columns = _scan.collect_schema().names()
-
-    return metadata, n1_df, n2_df, sample_metadata_df, available_columns
+    available_columns = (
+        pl.scan_parquet(DATAFILE).collect_schema().names() if VALIDATE_COLUMNS else None
+    )
+    return sample_metadata_df, available_columns
 
 
 # ── Merge comparison data (reactive to biosample selection) ─────────────
 @app.cell
 def merge_comparison(
-    get_biosamples, DATAFILE, JOIN_COLUMN, CATEGORY_COLUMN, metadata, pl,
-    merge_datasets, create_interpolated_colormap,
+    get_biosamples,
+    DATAFILE,
+    CATEGORY_COLUMN,
+    N_BINS,
+    pl,
+    create_interpolated_colormap,
 ):
     x_col_name, y_col_name = get_biosamples()
+    _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
+    _x_step = (_x_range[1] - _x_range[0]) / N_BINS
+    _y_step = (_y_range[1] - _y_range[0]) / N_BINS
 
-    _x = pl.read_parquet(DATAFILE, columns=[JOIN_COLUMN, x_col_name])
-    _y = pl.read_parquet(DATAFILE, columns=[JOIN_COLUMN, y_col_name])
-
-    all_data = merge_datasets(_x, _y, metadata, JOIN_COLUMN)
-    all_data = all_data.filter(
-        (~pl.col(x_col_name).is_nan()) & (~pl.col(y_col_name).is_nan())
+    comp_binned = (
+        pl.scan_parquet(DATAFILE)
+        .select([CATEGORY_COLUMN, x_col_name, y_col_name])
+        .filter(pl.col(x_col_name).is_not_nan() & pl.col(y_col_name).is_not_nan())
+        .with_columns(
+            [
+                ((pl.col(x_col_name) - _x_range[0]) / _x_step)
+                .floor()
+                .cast(pl.Int32)
+                .clip(0, N_BINS - 1)
+                .alias("xi"),
+                ((pl.col(y_col_name) - _y_range[0]) / _y_step)
+                .floor()
+                .cast(pl.Int32)
+                .clip(0, N_BINS - 1)
+                .alias("yi"),
+            ]
+        )
+        .group_by([CATEGORY_COLUMN, "xi", "yi"])
+        .agg(pl.len().alias("count"))
+        .with_columns(
+            [
+                (
+                    pl.col("xi").cast(pl.Float64) * _x_step + _x_range[0] + _x_step / 2
+                ).alias("cx"),
+                (
+                    pl.col("yi").cast(pl.Float64) * _y_step + _y_range[0] + _y_step / 2
+                ).alias("cy"),
+            ]
+        )
+        .collect(engine="streaming")
     )
-
-    unique_categories = sorted(all_data[CATEGORY_COLUMN].unique().to_list())
+    unique_categories = sorted(comp_binned[CATEGORY_COLUMN].unique().to_list())
     category_color_map = dict(
         zip(unique_categories, create_interpolated_colormap(len(unique_categories)))
     )
+    return comp_binned, x_col_name, y_col_name, unique_categories, category_color_map
 
-    return all_data, x_col_name, y_col_name, unique_categories, category_color_map
 
-
-# ── Merge N-data ────────────────────────────────────────────────────────
+# ── Load + bin N-data ────────────────────────────────────────────────────
 @app.cell
-def merge_n_data(n1_df, n2_df, metadata, JOIN_COLUMN, merge_datasets, get_numeric_column, pl):
-    n_all_data = merge_datasets(n2_df, n1_df, metadata, JOIN_COLUMN)
+def load_n_data(TSV_FILE, CATEGORY_COLUMN, JOIN_COLUMN, N_BINS, pl):
+    n_x_col = "N2"
+    n_y_col = "N1"
+    _x_range, _y_range = (0.0, 450.0), (0.0, 450.0)
+    _x_step = (_x_range[1] - _x_range[0]) / N_BINS
+    _y_step = (_y_range[1] - _y_range[0]) / N_BINS
 
-    n_x_col = get_numeric_column(n2_df, JOIN_COLUMN)
-    n_y_col = get_numeric_column(n1_df, JOIN_COLUMN)
-
-    n_all_data = n_all_data.filter(
-        (~pl.col(n_x_col).is_nan()) & (~pl.col(n_y_col).is_nan())
+    n_all_data = (
+        pl.read_csv(TSV_FILE, separator="\t")
+        .rename({"cCRE_type": CATEGORY_COLUMN})
+        .with_columns(
+            [
+                ((pl.col(n_x_col).cast(pl.Float64) - _x_range[0]) / _x_step)
+                .floor()
+                .cast(pl.Int32)
+                .clip(0, N_BINS - 1)
+                .alias("xi"),
+                ((pl.col(n_y_col).cast(pl.Float64) - _y_range[0]) / _y_step)
+                .floor()
+                .cast(pl.Int32)
+                .clip(0, N_BINS - 1)
+                .alias("yi"),
+            ]
+        )
+        .group_by([CATEGORY_COLUMN, "xi", "yi"])
+        .agg([pl.len().alias("count"), pl.col(JOIN_COLUMN).alias("ids")])
+        .with_columns(
+            [
+                (
+                    pl.col("xi").cast(pl.Float64) * _x_step + _x_range[0] + _x_step / 2
+                ).alias("cx"),
+                (
+                    pl.col("yi").cast(pl.Float64) * _y_step + _y_range[0] + _y_step / 2
+                ).alias("cy"),
+            ]
+        )
     )
-    return n_all_data, n_x_col, n_y_col
+    return (n_all_data,)
 
 
 # ── Category dropdown ───────────────────────────────────────────────────
@@ -128,14 +267,14 @@ def category_filter(unique_categories, mo):
 
 # ── Filter both datasets by selected category ──────────────────────────
 @app.cell
-def filter_data(category_dropdown, all_data, n_all_data, CATEGORY_COLUMN, pl):
+def filter_data(category_dropdown, comp_binned, n_all_data, CATEGORY_COLUMN, pl):
     _selected = category_dropdown.value
 
     if _selected == "All":
-        comp_filtered = all_data
+        comp_filtered = comp_binned
         n_filtered = n_all_data
     else:
-        comp_filtered = all_data.filter(pl.col(CATEGORY_COLUMN) == _selected)
+        comp_filtered = comp_binned.filter(pl.col(CATEGORY_COLUMN) == _selected)
         n_filtered = n_all_data.filter(pl.col(CATEGORY_COLUMN) == _selected)
 
     return comp_filtered, n_filtered
@@ -144,21 +283,27 @@ def filter_data(category_dropdown, all_data, n_all_data, CATEGORY_COLUMN, pl):
 # ── Comparison scatter plot ─────────────────────────────────────────────
 @app.cell
 def comparison_plot(
-    comp_filtered, x_col_name, y_col_name, CATEGORY_COLUMN, JOIN_COLUMN,
-    unique_categories, category_color_map, get_n_to_comp,
-    np, pl, go, mo, bin_scatter,
+    comp_filtered,
+    x_col_name,
+    y_col_name,
+    CATEGORY_COLUMN,
+    unique_categories,
+    category_color_map,
+    get_n_to_comp,
+    DATAFILE,
+    JOIN_COLUMN,
+    N_BINS,
+    np,
+    pl,
+    go,
+    mo,
 ):
-    # Bin each category independently, collect counts for global scaling
+    # Filter pre-binned data per category
     _cat_bins = []
     for _cat in unique_categories:
-        _cat_data = comp_filtered.filter(pl.col(CATEGORY_COLUMN) == _cat)
-        if len(_cat_data) == 0:
+        _cat_binned = comp_filtered.filter(pl.col(CATEGORY_COLUMN) == _cat)
+        if len(_cat_binned) == 0:
             continue
-        _cat_binned = bin_scatter(
-            _cat_data, x_col_name, y_col_name,
-            category_col=CATEGORY_COLUMN, id_col=JOIN_COLUMN,
-            n_bins=200, x_range=(-12.0, 9.0), y_range=(-12.0, 9.0),
-        )
         _cat_bins.append((_cat, _cat_binned))
 
     # Global size scaling across all categories
@@ -167,29 +312,35 @@ def comparison_plot(
     _lmin, _lmax = _all_log.min(), _all_log.max()
 
     _fig = go.Figure()
-    comp_ids: list[list[str]] = []
+    comp_bins: list[tuple[int, int]] = []
     _offset = 0
     for _cat, _cat_binned in _cat_bins:
         _n = len(_cat_binned)
-        _cat_log = _all_log[_offset:_offset + _n]
+        _cat_log = _all_log[_offset : _offset + _n]
         _offset += _n
         if _lmax > _lmin:
             _cat_sizes = 2 + (_cat_log - _lmin) / (_lmax - _lmin) * 5
         else:
             _cat_sizes = np.full_like(_cat_log, 2.0)
-        comp_ids.extend(_cat_binned["ids"].to_list())
+        comp_bins.extend(zip(_cat_binned["xi"].to_list(), _cat_binned["yi"].to_list()))
         _fig.add_trace(
             go.Scattergl(
                 x=_cat_binned["cx"].to_numpy(),
                 y=_cat_binned["cy"].to_numpy(),
                 mode="markers",
-                marker=dict(size=_cat_sizes, opacity=0.4, color=category_color_map[_cat], line=dict(width=0)),
+                marker=dict(
+                    size=_cat_sizes,
+                    opacity=0.4,
+                    color=category_color_map[_cat],
+                    line=dict(width=0),
+                ),
                 name=_cat,
             )
         )
 
     _ = _fig.update_layout(
-        width=600, height=600,
+        width=600,
+        height=600,
         xaxis=dict(range=[-12, 9], scaleanchor="y", scaleratio=1, title=x_col_name),
         yaxis=dict(range=[-12, 9], title=y_col_name),
         dragmode="select",
@@ -198,20 +349,62 @@ def comparison_plot(
         title="Comparison Plot",
     )
     _ = _fig.add_shape(
-        type="line", x0=-500, y0=-500, x1=500, y1=500,
+        type="line",
+        x0=-500,
+        y0=-500,
+        x1=500,
+        y1=500,
         line=dict(color="lightgray", width=1),
     )
 
+    # Highlight bins containing cCREs selected from N-plot (re-scan parquet)
     _n_ids = get_n_to_comp()
     if _n_ids:
-        _hl = comp_filtered.filter(pl.col(JOIN_COLUMN).is_in(list(_n_ids)))
-        if len(_hl) > 0:
-            _hl_binned = bin_scatter(
-                _hl, x_col_name, y_col_name,
-                category_col=CATEGORY_COLUMN, id_col=JOIN_COLUMN,
-                n_bins=200, x_range=(-12.0, 9.0), y_range=(-12.0, 9.0),
+        _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
+        _x_step = (_x_range[1] - _x_range[0]) / N_BINS
+        _y_step = (_y_range[1] - _y_range[0]) / N_BINS
+        _hl_binned = (
+            pl.scan_parquet(DATAFILE)
+            .select([JOIN_COLUMN, x_col_name, y_col_name])
+            .filter(
+                pl.col(x_col_name).is_not_nan()
+                & pl.col(y_col_name).is_not_nan()
+                & pl.col(JOIN_COLUMN).is_in(list(_n_ids))
             )
-            _hl_counts = _hl_binned["count"].to_numpy()
+            .with_columns(
+                [
+                    ((pl.col(x_col_name) - _x_range[0]) / _x_step)
+                    .floor()
+                    .cast(pl.Int32)
+                    .clip(0, N_BINS - 1)
+                    .alias("xi"),
+                    ((pl.col(y_col_name) - _y_range[0]) / _y_step)
+                    .floor()
+                    .cast(pl.Int32)
+                    .clip(0, N_BINS - 1)
+                    .alias("yi"),
+                ]
+            )
+            .group_by(["xi", "yi"])
+            .agg(pl.len().alias("hl_count"))
+            .with_columns(
+                [
+                    (
+                        pl.col("xi").cast(pl.Float64) * _x_step
+                        + _x_range[0]
+                        + _x_step / 2
+                    ).alias("cx"),
+                    (
+                        pl.col("yi").cast(pl.Float64) * _y_step
+                        + _y_range[0]
+                        + _y_step / 2
+                    ).alias("cy"),
+                ]
+            )
+            .collect(engine="streaming")
+        )
+        if len(_hl_binned) > 0:
+            _hl_counts = _hl_binned["hl_count"].to_numpy()
             _hl_log = np.log1p(_hl_counts)
             _hl_lmin, _hl_lmax = _hl_log.min(), _hl_log.max()
             if _hl_lmax > _hl_lmin:
@@ -223,48 +416,94 @@ def comparison_plot(
                     x=_hl_binned["cx"].to_numpy(),
                     y=_hl_binned["cy"].to_numpy(),
                     mode="markers",
-                    marker=dict(size=_hl_sizes, color="red", opacity=0.4, line=dict(width=0)),
+                    marker=dict(
+                        size=_hl_sizes, color="red", opacity=0.4, line=dict(width=0)
+                    ),
                     name="Selected",
                     showlegend=False,
                 )
             )
 
     comp_chart = mo.ui.plotly(_fig)
-    return comp_chart, comp_ids
+    return comp_chart, comp_bins
 
 
 # ── Resolve selection from comparison chart → cCRE IDs ─────────────────
 @app.cell
-def resolve_comp_selection(comp_chart, comp_ids, set_comp_to_n, set_n_to_comp):
-    _selected = set()
+def resolve_comp_selection(
+    comp_chart,
+    comp_bins,
+    set_comp_to_n,
+    set_n_to_comp,
+    DATAFILE,
+    JOIN_COLUMN,
+    x_col_name,
+    y_col_name,
+    N_BINS,
+    pl,
+):
+    _selected_bins = set()
     _indices = comp_chart.indices
     if _indices is not None and len(_indices) > 0:
         for _i in _indices:
-            if 0 <= _i < len(comp_ids):
-                _selected.update(comp_ids[_i])
-    if _selected:
-        set_comp_to_n(_selected)
+            if 0 <= _i < len(comp_bins):
+                _selected_bins.add(comp_bins[_i])
+    if _selected_bins:
+        _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
+        _x_step = (_x_range[1] - _x_range[0]) / N_BINS
+        _y_step = (_y_range[1] - _y_range[0]) / N_BINS
+        _bin_df = pl.DataFrame(
+            {
+                "xi": pl.Series([b[0] for b in _selected_bins], dtype=pl.Int32),
+                "yi": pl.Series([b[1] for b in _selected_bins], dtype=pl.Int32),
+            }
+        )
+        _ids = (
+            pl.scan_parquet(DATAFILE)
+            .select([JOIN_COLUMN, x_col_name, y_col_name])
+            .filter(pl.col(x_col_name).is_not_nan() & pl.col(y_col_name).is_not_nan())
+            .with_columns(
+                [
+                    ((pl.col(x_col_name) - _x_range[0]) / _x_step)
+                    .floor()
+                    .cast(pl.Int32)
+                    .clip(0, N_BINS - 1)
+                    .alias("xi"),
+                    ((pl.col(y_col_name) - _y_range[0]) / _y_step)
+                    .floor()
+                    .cast(pl.Int32)
+                    .clip(0, N_BINS - 1)
+                    .alias("yi"),
+                ]
+            )
+            .join(_bin_df.lazy(), on=["xi", "yi"], how="inner")
+            .select(JOIN_COLUMN)
+            .collect(engine="streaming")[JOIN_COLUMN]
+            .to_list()
+        )
+        set_comp_to_n(set(_ids))
         set_n_to_comp(set())
 
 
 # ── N-data scatter plot (highlights selection from comparison) ──────────
 @app.cell
 def n_data_plot(
-    n_filtered, n_x_col, n_y_col, CATEGORY_COLUMN, JOIN_COLUMN,
-    unique_categories, category_color_map,
-    get_comp_to_n, np, pl, go, mo, bin_scatter,
+    n_filtered,
+    CATEGORY_COLUMN,
+    unique_categories,
+    category_color_map,
+    get_comp_to_n,
+    np,
+    pl,
+    go,
+    mo,
 ):
-    # Bin each category independently, collect counts for global scaling
+    # Filter pre-binned data per category
     _cat_bins = []
     for _cat in unique_categories:
-        _cat_data = n_filtered.filter(pl.col(CATEGORY_COLUMN) == _cat)
-        if len(_cat_data) == 0:
+        _cat_binned = n_filtered.filter(pl.col(CATEGORY_COLUMN) == _cat)
+        if len(_cat_binned) == 0:
             continue
-        _cat_binned = bin_scatter(
-            _cat_data, n_x_col, n_y_col,
-            category_col=CATEGORY_COLUMN, id_col=JOIN_COLUMN,
-            n_bins=200, x_range=(0.0, 450.0), y_range=(0.0, 450.0),
-        )
         _cat_bins.append((_cat, _cat_binned))
 
     # Global size scaling across all categories
@@ -277,7 +516,7 @@ def n_data_plot(
     _offset = 0
     for _cat, _cat_binned in _cat_bins:
         _n = len(_cat_binned)
-        _cat_log = _all_log[_offset:_offset + _n]
+        _cat_log = _all_log[_offset : _offset + _n]
         _offset += _n
         if _lmax > _lmin:
             _cat_sizes = 2 + (_cat_log - _lmin) / (_lmax - _lmin) * 5
@@ -289,13 +528,19 @@ def n_data_plot(
                 x=_cat_binned["cx"].to_numpy(),
                 y=_cat_binned["cy"].to_numpy(),
                 mode="markers",
-                marker=dict(size=_cat_sizes, opacity=0.4, color=category_color_map[_cat], line=dict(width=0)),
+                marker=dict(
+                    size=_cat_sizes,
+                    opacity=0.4,
+                    color=category_color_map[_cat],
+                    line=dict(width=0),
+                ),
                 name=_cat,
             )
         )
 
     _ = _fig.update_layout(
-        width=600, height=600,
+        width=600,
+        height=600,
         xaxis=dict(range=[0, 450], scaleanchor="y", scaleratio=1, title="N2"),
         yaxis=dict(range=[0, 450], title="N1"),
         dragmode="select",
@@ -306,14 +551,14 @@ def n_data_plot(
 
     _comp_ids = get_comp_to_n()
     if _comp_ids:
-        _hl = n_filtered.filter(pl.col(JOIN_COLUMN).is_in(list(_comp_ids)))
-        if len(_hl) > 0:
-            _hl_binned = bin_scatter(
-                _hl, n_x_col, n_y_col,
-                category_col=CATEGORY_COLUMN, id_col=JOIN_COLUMN,
-                n_bins=200, x_range=(0.0, 450.0), y_range=(0.0, 450.0),
-            )
-            _hl_counts = _hl_binned["count"].to_numpy()
+        _hl_binned = (
+            n_filtered.explode("ids")
+            .filter(pl.col("ids").is_in(list(_comp_ids)))
+            .group_by(["xi", "yi", "cx", "cy"])
+            .agg(pl.len().alias("hl_count"))
+        )
+        if len(_hl_binned) > 0:
+            _hl_counts = _hl_binned["hl_count"].to_numpy()
             _hl_log = np.log1p(_hl_counts)
             _hl_lmin, _hl_lmax = _hl_log.min(), _hl_log.max()
             if _hl_lmax > _hl_lmin:
@@ -325,7 +570,9 @@ def n_data_plot(
                     x=_hl_binned["cx"].to_numpy(),
                     y=_hl_binned["cy"].to_numpy(),
                     mode="markers",
-                    marker=dict(size=_hl_sizes, color="red", opacity=0.4, line=dict(width=0)),
+                    marker=dict(
+                        size=_hl_sizes, color="red", opacity=0.4, line=dict(width=0)
+                    ),
                     name="Selected",
                     showlegend=False,
                 )
@@ -362,7 +609,7 @@ def legend(unique_categories, category_color_map, mo):
     legend_html = mo.Html(
         f'<div style="display:flex;flex-direction:column;">'
         f'<strong style="margin-bottom:4px;">cCRE Class Legend</strong>'
-        f'{_rows}</div>'
+        f"{_rows}</div>"
     )
     return (legend_html,)
 
@@ -396,7 +643,6 @@ def metadata_table(sample_metadata_df, mo):
         page_size=20,
         label="Sample Metadata — select exactly 2 rows, then click Apply",
     )
-    table
     return (table,)
 
 
@@ -410,21 +656,33 @@ def apply_section(table, set_biosamples, available_columns, mo):
 
     if _ok and "biosample" in _rows.columns:
         _bs = _rows["biosample"].to_list()
-        _valid = all(b in available_columns for b in _bs)
+        _valid = (
+            all(b in available_columns for b in _bs)
+            if available_columns is not None
+            else True
+        )
     else:
         _bs = []
         _valid = False
 
     if _n == 0:
-        _msg = mo.md("*Select 2 rows from the table above*")
+        _msg = mo.callout(
+            mo.md("Select 2 samples from the table below to compare"), kind="neutral"
+        )
     elif _n == 1:
-        _msg = mo.md("*Select one more row*")
+        _msg = mo.callout(mo.md("Select one more sample"), kind="warn")
     elif _ok and _valid:
-        _msg = mo.md(f"Ready to apply: **{_bs[0]}** vs **{_bs[1]}**")
+        _msg = mo.callout(
+            mo.md(f"Ready to apply: **{_bs[0]}** vs **{_bs[1]}**"), kind="success"
+        )
     elif _ok and not _valid:
-        _msg = mo.md("**Error:** selected biosamples not found in data file columns")
+        _msg = mo.callout(
+            mo.md("Selected samples not found in data file columns"), kind="danger"
+        )
     else:
-        _msg = mo.md(f"*Too many rows selected ({_n}) — select exactly 2*")
+        _msg = mo.callout(
+            mo.md(f"Too many samples selected ({_n}) — select exactly 2"), kind="danger"
+        )
 
     _btn = mo.ui.button(
         label="Apply Selection",
@@ -433,7 +691,7 @@ def apply_section(table, set_biosamples, available_columns, mo):
         kind="success" if (_ok and _valid) else "neutral",
     )
 
-    mo.hstack([_btn, _msg], align="center", gap=1)
+    mo.vstack([_msg, table, _btn])
 
 
 if __name__ == "__main__":
