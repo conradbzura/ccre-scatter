@@ -109,7 +109,7 @@ def helpers(np, pl, LinearSegmentedColormap, mcolors):
 # ── Configuration ────────────────────────────────────────────────────────
 @app.cell
 def config():
-    DATAFILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/comb_healthy_scatac_tcga_encode.parquet"
+    DATAFILE_UINT8 = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/ccre_zscore_uint8.parquet"
     TSV_FILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/cCREs_N1_N2_zoonomia_replicate_447_wgroups.tsv"
     SAMPLE_METADATA_FILE = (
         "https://users.abdenlab.org/conrad/itcr/ccre-scatter/sample_metadata.pq"
@@ -118,10 +118,14 @@ def config():
     CATEGORY_COLUMN = "class"
     INITIAL_X = "LGGx-TCGA-DU-6395-02A-11-A644-42-X037-S06"
     INITIAL_Y = "LGGx-TCGA-F6-A8O3-01A-31-A617-42-X013-S07"
-    N_BINS = 150
+    N_BINS = 256
+    # Mapping constants from preprocessing (global z-score range → uint8)
+    ZSCORE_MIN = -13.92728
+    ZSCORE_MAX = 10.77115249633789
+    ZSCORE_STEP = (ZSCORE_MAX - ZSCORE_MIN) / N_BINS
     VALIDATE_COLUMNS = False
     return (
-        DATAFILE,
+        DATAFILE_UINT8,
         TSV_FILE,
         SAMPLE_METADATA_FILE,
         JOIN_COLUMN,
@@ -129,6 +133,9 @@ def config():
         INITIAL_X,
         INITIAL_Y,
         N_BINS,
+        ZSCORE_MIN,
+        ZSCORE_MAX,
+        ZSCORE_STEP,
         VALIDATE_COLUMNS,
     )
 
@@ -150,10 +157,12 @@ def selection_state(mo):
 
 # ── Load metadata + N-data (runs once) ──────────────────────────────────
 @app.cell
-def load_static(DATAFILE, SAMPLE_METADATA_FILE, VALIDATE_COLUMNS, pl):
+def load_static(DATAFILE_UINT8, SAMPLE_METADATA_FILE, VALIDATE_COLUMNS, pl):
     sample_metadata_df = pl.read_parquet(SAMPLE_METADATA_FILE)
     available_columns = (
-        pl.scan_parquet(DATAFILE).collect_schema().names() if VALIDATE_COLUMNS else None
+        pl.scan_parquet(DATAFILE_UINT8).collect_schema().names()
+        if VALIDATE_COLUMNS
+        else None
     )
     return sample_metadata_df, available_columns
 
@@ -162,44 +171,34 @@ def load_static(DATAFILE, SAMPLE_METADATA_FILE, VALIDATE_COLUMNS, pl):
 @app.cell
 def merge_comparison(
     get_biosamples,
-    DATAFILE,
+    DATAFILE_UINT8,
     CATEGORY_COLUMN,
-    N_BINS,
+    ZSCORE_MIN,
+    ZSCORE_STEP,
     pl,
     create_interpolated_colormap,
 ):
     x_col_name, y_col_name = get_biosamples()
-    _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
-    _x_step = (_x_range[1] - _x_range[0]) / N_BINS
-    _y_step = (_y_range[1] - _y_range[0]) / N_BINS
 
     comp_binned = (
-        pl.scan_parquet(DATAFILE)
+        pl.scan_parquet(DATAFILE_UINT8)
         .select([CATEGORY_COLUMN, x_col_name, y_col_name])
-        .filter(pl.col(x_col_name).is_not_nan() & pl.col(y_col_name).is_not_nan())
-        .with_columns(
-            [
-                ((pl.col(x_col_name) - _x_range[0]) / _x_step)
-                .floor()
-                .cast(pl.Int32)
-                .clip(0, N_BINS - 1)
-                .alias("xi"),
-                ((pl.col(y_col_name) - _y_range[0]) / _y_step)
-                .floor()
-                .cast(pl.Int32)
-                .clip(0, N_BINS - 1)
-                .alias("yi"),
-            ]
-        )
+        .filter(pl.col(x_col_name).is_not_null() & pl.col(y_col_name).is_not_null())
+        .rename({x_col_name: "xi", y_col_name: "yi"})
+        .cast({"xi": pl.Int32, "yi": pl.Int32})
         .group_by([CATEGORY_COLUMN, "xi", "yi"])
         .agg(pl.len().alias("count"))
         .with_columns(
             [
                 (
-                    pl.col("xi").cast(pl.Float64) * _x_step + _x_range[0] + _x_step / 2
+                    pl.col("xi").cast(pl.Float64) * ZSCORE_STEP
+                    + ZSCORE_MIN
+                    + ZSCORE_STEP / 2
                 ).alias("cx"),
                 (
-                    pl.col("yi").cast(pl.Float64) * _y_step + _y_range[0] + _y_step / 2
+                    pl.col("yi").cast(pl.Float64) * ZSCORE_STEP
+                    + ZSCORE_MIN
+                    + ZSCORE_STEP / 2
                 ).alias("cy"),
             ]
         )
@@ -290,9 +289,11 @@ def comparison_plot(
     unique_categories,
     category_color_map,
     get_n_to_comp,
-    DATAFILE,
+    DATAFILE_UINT8,
     JOIN_COLUMN,
-    N_BINS,
+    ZSCORE_MIN,
+    ZSCORE_MAX,
+    ZSCORE_STEP,
     np,
     pl,
     go,
@@ -341,8 +342,13 @@ def comparison_plot(
     _ = _fig.update_layout(
         width=600,
         height=600,
-        xaxis=dict(range=[-12, 9], scaleanchor="y", scaleratio=1, title=x_col_name),
-        yaxis=dict(range=[-12, 9], title=y_col_name),
+        xaxis=dict(
+            range=[ZSCORE_MIN, ZSCORE_MAX],
+            scaleanchor="y",
+            scaleratio=1,
+            title=x_col_name,
+        ),
+        yaxis=dict(range=[ZSCORE_MIN, ZSCORE_MAX], title=y_col_name),
         dragmode="select",
         showlegend=False,
         margin=dict(l=50, r=20, t=40, b=50),
@@ -360,44 +366,29 @@ def comparison_plot(
     # Highlight bins containing cCREs selected from N-plot (re-scan parquet)
     _n_ids = get_n_to_comp()
     if _n_ids:
-        _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
-        _x_step = (_x_range[1] - _x_range[0]) / N_BINS
-        _y_step = (_y_range[1] - _y_range[0]) / N_BINS
         _hl_binned = (
-            pl.scan_parquet(DATAFILE)
+            pl.scan_parquet(DATAFILE_UINT8)
             .select([JOIN_COLUMN, x_col_name, y_col_name])
             .filter(
-                pl.col(x_col_name).is_not_nan()
-                & pl.col(y_col_name).is_not_nan()
+                pl.col(x_col_name).is_not_null()
+                & pl.col(y_col_name).is_not_null()
                 & pl.col(JOIN_COLUMN).is_in(list(_n_ids))
             )
-            .with_columns(
-                [
-                    ((pl.col(x_col_name) - _x_range[0]) / _x_step)
-                    .floor()
-                    .cast(pl.Int32)
-                    .clip(0, N_BINS - 1)
-                    .alias("xi"),
-                    ((pl.col(y_col_name) - _y_range[0]) / _y_step)
-                    .floor()
-                    .cast(pl.Int32)
-                    .clip(0, N_BINS - 1)
-                    .alias("yi"),
-                ]
-            )
+            .rename({x_col_name: "xi", y_col_name: "yi"})
+            .cast({"xi": pl.Int32, "yi": pl.Int32})
             .group_by(["xi", "yi"])
             .agg(pl.len().alias("hl_count"))
             .with_columns(
                 [
                     (
-                        pl.col("xi").cast(pl.Float64) * _x_step
-                        + _x_range[0]
-                        + _x_step / 2
+                        pl.col("xi").cast(pl.Float64) * ZSCORE_STEP
+                        + ZSCORE_MIN
+                        + ZSCORE_STEP / 2
                     ).alias("cx"),
                     (
-                        pl.col("yi").cast(pl.Float64) * _y_step
-                        + _y_range[0]
-                        + _y_step / 2
+                        pl.col("yi").cast(pl.Float64) * ZSCORE_STEP
+                        + ZSCORE_MIN
+                        + ZSCORE_STEP / 2
                     ).alias("cy"),
                 ]
             )
@@ -435,11 +426,10 @@ def resolve_comp_selection(
     comp_bins,
     set_comp_to_n,
     set_n_to_comp,
-    DATAFILE,
+    DATAFILE_UINT8,
     JOIN_COLUMN,
     x_col_name,
     y_col_name,
-    N_BINS,
     pl,
 ):
     _selected_bins = set()
@@ -449,9 +439,6 @@ def resolve_comp_selection(
             if 0 <= _i < len(comp_bins):
                 _selected_bins.add(comp_bins[_i])
     if _selected_bins:
-        _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
-        _x_step = (_x_range[1] - _x_range[0]) / N_BINS
-        _y_step = (_y_range[1] - _y_range[0]) / N_BINS
         _bin_df = pl.DataFrame(
             {
                 "xi": pl.Series([b[0] for b in _selected_bins], dtype=pl.Int32),
@@ -459,23 +446,14 @@ def resolve_comp_selection(
             }
         )
         _ids = (
-            pl.scan_parquet(DATAFILE)
+            pl.scan_parquet(DATAFILE_UINT8)
             .select([JOIN_COLUMN, x_col_name, y_col_name])
-            .filter(pl.col(x_col_name).is_not_nan() & pl.col(y_col_name).is_not_nan())
-            .with_columns(
-                [
-                    ((pl.col(x_col_name) - _x_range[0]) / _x_step)
-                    .floor()
-                    .cast(pl.Int32)
-                    .clip(0, N_BINS - 1)
-                    .alias("xi"),
-                    ((pl.col(y_col_name) - _y_range[0]) / _y_step)
-                    .floor()
-                    .cast(pl.Int32)
-                    .clip(0, N_BINS - 1)
-                    .alias("yi"),
-                ]
+            .filter(
+                pl.col(x_col_name).is_not_null()
+                & pl.col(y_col_name).is_not_null()
             )
+            .rename({x_col_name: "xi", y_col_name: "yi"})
+            .cast({"xi": pl.Int32, "yi": pl.Int32})
             .join(_bin_df.lazy(), on=["xi", "yi"], how="inner")
             .select(JOIN_COLUMN)
             .collect(engine="streaming")[JOIN_COLUMN]
@@ -625,13 +603,25 @@ def layout(category_dropdown, comp_chart, n_chart, legend_html, mo):
     mo.vstack([category_dropdown, _row])
 
 
-# ── Selection info ──────────────────────────────────────────────────────
+# ── Selection info + export ────────────────────────────────────────────
 @app.cell
 def selection_summary(get_comp_to_n, get_n_to_comp, mo):
     _comp = get_comp_to_n()
     _n = get_n_to_comp()
-    _count = len(_comp) + len(_n)
-    mo.md(f"**Selected cCREs:** {_count}")
+    _all_ids = sorted(_comp | _n)
+    _count = len(_all_ids)
+
+    if _count > 0:
+        _csv = "\n".join(["cCRE"] + _all_ids)
+        _download = mo.download(
+            data=_csv.encode(),
+            filename="selected_ccres.csv",
+            mimetype="text/csv",
+            label=f"Export {_count} cCREs",
+        )
+        mo.hstack([mo.md(f"**Selected cCREs:** {_count}"), _download], align="center", gap=1)
+    else:
+        mo.md("**Selected cCREs:** 0")
 
 
 # ── Metadata table ──────────────────────────────────────────────────────

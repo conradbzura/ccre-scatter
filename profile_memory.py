@@ -12,14 +12,18 @@ import plotly.graph_objects as go
 from scatterplot_helpers import create_interpolated_colormap
 
 # ── Configuration (from app.py config cell) ──────────────────────────────
-DATAFILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/comb_healthy_scatac_tcga_encode.parquet"
+DATAFILE_UINT8 = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/ccre_zscore_uint8.parquet"
 TSV_FILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/cCREs_N1_N2_zoonomia_replicate_447_wgroups.tsv"
 SAMPLE_METADATA_FILE = "https://users.abdenlab.org/conrad/itcr/ccre-scatter/sample_metadata.pq"
 JOIN_COLUMN = "cCRE"
 CATEGORY_COLUMN = "class"
 INITIAL_X = "LGGx-TCGA-DU-6395-02A-11-A644-42-X037-S06"
 INITIAL_Y = "LGGx-TCGA-F6-A8O3-01A-31-A617-42-X013-S07"
-N_BINS = 150
+N_BINS = 256
+# Mapping constants from preprocessing (global z-score range → uint8)
+ZSCORE_MIN = -13.92728
+ZSCORE_MAX = 10.77115249633789
+ZSCORE_STEP = (ZSCORE_MAX - ZSCORE_MIN) / N_BINS
 
 
 def main():
@@ -55,28 +59,21 @@ def main():
     )
     print(f"  n_all_data (binned): {n_all_data.shape}")
 
-    # ── Step 3: merge_comparison (streaming, no ids) ─────────────────────
+    # ── Step 3: merge_comparison (streaming uint8, no binning arithmetic) ─
     x_col_name, y_col_name = INITIAL_X, INITIAL_Y
-    _x_range, _y_range = (-12.0, 9.0), (-12.0, 9.0)
-    _x_step = (_x_range[1] - _x_range[0]) / N_BINS
-    _y_step = (_y_range[1] - _y_range[0]) / N_BINS
 
     print(f"Streaming comparison binning: {x_col_name}, {y_col_name}...")
     comp_binned = (
-        pl.scan_parquet(DATAFILE)
+        pl.scan_parquet(DATAFILE_UINT8)
         .select([CATEGORY_COLUMN, x_col_name, y_col_name])
-        .filter(pl.col(x_col_name).is_not_nan() & pl.col(y_col_name).is_not_nan())
-        .with_columns([
-            ((pl.col(x_col_name) - _x_range[0]) / _x_step)
-                .floor().cast(pl.Int32).clip(0, N_BINS - 1).alias("xi"),
-            ((pl.col(y_col_name) - _y_range[0]) / _y_step)
-                .floor().cast(pl.Int32).clip(0, N_BINS - 1).alias("yi"),
-        ])
+        .filter(pl.col(x_col_name).is_not_null() & pl.col(y_col_name).is_not_null())
+        .rename({x_col_name: "xi", y_col_name: "yi"})
+        .cast({"xi": pl.Int32, "yi": pl.Int32})
         .group_by([CATEGORY_COLUMN, "xi", "yi"])
         .agg(pl.len().alias("count"))
         .with_columns([
-            (pl.col("xi").cast(pl.Float64) * _x_step + _x_range[0] + _x_step / 2).alias("cx"),
-            (pl.col("yi").cast(pl.Float64) * _y_step + _y_range[0] + _y_step / 2).alias("cy"),
+            (pl.col("xi").cast(pl.Float64) * ZSCORE_STEP + ZSCORE_MIN + ZSCORE_STEP / 2).alias("cx"),
+            (pl.col("yi").cast(pl.Float64) * ZSCORE_STEP + ZSCORE_MIN + ZSCORE_STEP / 2).alias("cy"),
         ])
         .collect(engine="streaming")
     )
@@ -126,8 +123,8 @@ def main():
 
     _ = comp_fig.update_layout(
         width=600, height=600,
-        xaxis=dict(range=[-12, 9], scaleanchor="y", scaleratio=1, title=x_col_name),
-        yaxis=dict(range=[-12, 9], title=y_col_name),
+        xaxis=dict(range=[ZSCORE_MIN, ZSCORE_MAX], scaleanchor="y", scaleratio=1, title=x_col_name),
+        yaxis=dict(range=[ZSCORE_MIN, ZSCORE_MAX], title=y_col_name),
         dragmode="select",
         showlegend=False,
         margin=dict(l=50, r=20, t=40, b=50),
